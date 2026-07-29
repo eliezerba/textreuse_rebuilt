@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>מפת שימוש חוזר בטקסט</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">דלג לתוכן</a>
+
+  <header class="app-header">
+    <div class="brand-block">
+      <p class="eyebrow">TEXTREUSE · סביבת מחקר</p>
+      <h1>מפת שימוש חוזר בטקסט</h1>
+      <p>קריאה צמודה של קטעי המקור לצד מועמדי הקרבה, עם מטא־דאטה מספריא ומבט רוחב על יחסי הספרים.</p>
+    </div>
+    <div class="header-actions">
+      <button id="langToggleBtn" class="secondary-button" type="button">EN</button>
+      <input id="fileInput" type="file" accept="application/json,.json" multiple hidden>
+      <button id="loadFileBtn" class="primary-button" type="button">בחירת מאגרי JSON</button>
+      <button id="exportCsvBtn" class="secondary-button" type="button">ייצוא CSV</button>
+    </div>
+  </header>
+
+  <section class="dataset-bar" aria-label="מצב הנתונים">
+    <div><span>מאגרים פעילים</span><strong id="datasetName">לא נטען</strong></div>
+    <div><span>מצב</span><strong id="datasetStatus">ממתין לנתונים</strong></div>
+    <div><span>קטעי מקור</span><strong id="recordCount">0</strong></div>
+    <div><span>קטעי דאטהסט</span><strong id="candidateCount">0</strong></div>
+    <div><span>ספרים</span><strong id="bookCount">0</strong></div>
+    <div class="metadata-status-cell">
+      <span>ספריא</span>
+      <strong id="metadataStatus">לא התחיל</strong>
+      <button id="retryMetadataBtn" type="button" class="text-button" hidden>נסה שוב</button>
+    </div>
+  </section>
+
+  <main id="mainContent">
+    <section id="emptyState" class="empty-state">
+      <div class="empty-state-card">
+        <span class="empty-icon">↗</span>
+        <h2>טען את תוצר ה־TEXTREUSE</h2>
+        <p data-empty-message>המערכת מאתרת את כל קובצי ה־JSON שבתיקייה ומאפשרת לטעון אחד מהם או כמה יחד.</p>
+        <button type="button" class="primary-button" data-open-sources>בחירת מאגרי JSON</button>
+        <button type="button" class="secondary-button" data-open-file>בחירת קבצים מהמחשב</button>
+        <p class="small-note">לטעינה אוטומטית יש להפעיל את התיקייה באמצעות שרת מקומי. הוראות מלאות נמצאות בקובץ README.</p>
+      </div>
+    </section>
+
+    <section id="workspace" class="workspace" hidden>
+      <section class="control-panel" aria-label="מסננים">
+        <label class="control search-control">
+          <span>חיפוש</span>
+          <input id="searchInput" type="search" placeholder="טקסט, ספר, מראה מקום…">
+        </label>
+        <label class="control range-control">
+          <span>ציון מנורמל מינימלי <b id="minNormValue">0%</b></span>
+          <input id="minNormInput" type="range" min="0" max="1" step="0.01" value="0">
+        </label>
+        <label class="control range-control">
+          <span>score מינימלי <b id="minScoreValue">0</b></span>
+          <input id="minScoreInput" type="range" min="0" max="1500" step="1" value="0">
+        </label>
+        <div class="control">
+          <span>מאגרי מקור</span>
+          <details id="datasetMultiSelect" class="multi-select">
+            <summary id="datasetMultiSummary">כל המאגרים שנטענו</summary>
+            <div id="datasetMultiOptions" class="multi-select-menu"></div>
+          </details>
+        </div>
+        <div class="control">
+          <span>ספרי הדאטהסט</span>
+          <details id="bookMultiSelect" class="multi-select">
+            <summary id="bookMultiSummary">כל הספרים</summary>
+            <div id="bookMultiOptions" class="multi-select-menu"></div>
+          </details>
+        </div>
+        <div class="control">
+          <span>קטגוריות</span>
+          <details id="categoryMultiSelect" class="multi-select">
+            <summary id="categoryMultiSummary">כל הקטגוריות</summary>
+            <div id="categoryMultiOptions" class="multi-select-menu"></div>
+          </details>
+        </div>
+        <label class="control">
+          <span>מיון קטעי הדאטהסט</span>
+          <select id="sortSelect">
+            <option value="normScore">ציון מנורמל</option>
+            <option value="score">score</option>
+            <option value="alignmentScore">ציון יישור</option>
+            <option value="book">שם הספר</option>
+          </select>
+        </label>
+        <label class="checkbox-control"><input id="exactOnlyInput" type="checkbox"><span>רק התאמות מלאות</span></label>
+        <button id="resetFiltersBtn" class="text-button" type="button">איפוס מסננים</button>
+      </section>
+
+      <div class="filter-summary" id="activeFilterSummary"></div>
+
+      <nav class="view-tabs" role="tablist" aria-label="תצוגות המחקר">
+        <button class="view-tab is-active" type="button" data-view="read" role="tab" aria-selected="true">קריאה והשוואה</button>
+        <button class="view-tab" type="button" data-view="synopsis" role="tab" aria-selected="false">סינופסיס <span id="synopsisTabCount" class="tab-count">0</span></button>
+        <button class="view-tab" type="button" data-view="reverse" role="tab" aria-selected="false">קריאה הפוכה</button>
+        <button class="view-tab" type="button" data-view="matrix" role="tab" aria-selected="false">מפת חום</button>
+        <button class="view-tab" type="button" data-view="network" role="tab" aria-selected="false">רשת ספרים</button>
+        <button class="view-tab" type="button" data-view="scatter" role="tab" aria-selected="false">פיזור ציונים</button>
+        <button class="view-tab" type="button" data-view="library" role="tab" aria-selected="false">קטלוג ספרים</button>
+        <button class="view-tab" type="button" data-view="diagnostics" role="tab" aria-selected="false">אבחון דאטה</button>
+      </nav>
+
+      <section class="view-panel" data-view="reverse">
+        <div class="visualization-header">
+          <div>
+            <p class="pane-kicker">מבט הפוך</p>
+            <h2>מהדאטהסט אל ספר המקור</h2>
+            <p>בחר חיבור מתוך הדאטהסט וקבל את קטעי ספר המקור הקרובים אליו ביותר. זהו המבט ההפוך לתצוגת הקריאה הראשית.</p>
+          </div>
+          <div class="visualization-controls reverse-controls">
+            <label><span>יחידת ניתוח בדאטהסט</span><select id="reverseDatasetModeSelect">
+              <option value="book">לפי ספר</option>
+              <option value="genizaAll">גניזה כקורפוס אחד</option>
+              <option value="genizaFragment">גניזה לפי פרגמנט</option>
+              <option value="vrrManuscript">VRR לפי כתב־יד</option>
+            </select></label>
+            <label><span>בחירה</span><select id="reverseBookSelect"></select></label>
+            <label><span>כמה קטעים להציג</span><input id="reverseTopInput" type="number" min="3" max="120" value="30"></label>
+            <button id="reverseRefreshBtn" type="button" class="primary-button">עדכן</button>
+          </div>
+        </div>
+        <div id="reverseSummary" class="filter-summary"></div>
+        <div class="reverse-layout">
+          <section class="table-card reverse-table-card">
+            <table class="diagnostic-table reverse-table">
+              <thead><tr><th>קטע בספר המקור</th><th>ציון מנורמל מיטבי</th><th>ציון יישור מיטבי</th><th>score מיטבי</th><th>מועמדים רלוונטיים</th><th>פעולה</th></tr></thead>
+              <tbody id="reverseTableBody"></tbody>
+            </table>
+          </section>
+          <section class="pane reverse-heat-pane">
+            <div class="pane-header">
+              <div><p class="pane-kicker">מפת חום</p><h2 id="reverseHeatTitle">התפלגות לאורך ספר המקור</h2></div>
+            </div>
+            <div id="reverseHeatmapContainer" class="heatmap-container"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view-panel is-active" data-view="read">
+        <div class="reading-layout">
+          <aside class="pane source-pane">
+            <div class="pane-header">
+              <div class="source-rail-heading"><p class="pane-kicker">ספר המקור</p><h2 id="sourceRailTitle">טוען את כותרת הספר…</h2><small id="sourceRailSubtitle">קטעי הספר לפי סדר המקור</small></div>
+              <span id="sourceListCount" class="count-badge">0 קטעים</span>
+            </div>
+            <div id="sourceList" class="source-list" aria-label="קטעי ספר המקור לפי סדרם"></div>
+          </aside>
+
+          <section class="comparison-pane">
+            <div class="comparison-toolbar">
+              <div class="record-navigation">
+                <button id="prevRecordBtn" type="button" class="icon-button" title="הקטע הקודם">↑</button>
+                <button id="nextRecordBtn" type="button" class="icon-button" title="הקטע הבא">↓</button>
+              </div>
+              <p id="alignmentNote" class="alignment-note"></p>
+              <div class="record-navigation">
+                <button id="prevCandidateBtn" type="button" class="icon-button" title="המועמד הקודם">→</button>
+                <button id="nextCandidateBtn" type="button" class="icon-button" title="המועמד הבא">←</button>
+              </div>
+            </div>
+
+            <div class="selection-action-bar">
+              <button id="addActiveCandidateBtn" type="button" class="secondary-button">הוסף מועמד לסינופסיס</button>
+              <button id="openSynopsisBtn" type="button" class="primary-button">פתח סינופסיס</button>
+              <span id="synopsisQuickCount" class="selection-status">לא נבחרו קטעים מן הדאטהסט</span>
+            </div>
+
+            <div class="metric-strip" aria-label="ציוני ההתאמה">
+              <div><span>score</span><strong id="scoreRaw">—</strong></div>
+              <div><span>ציון מנורמל</span><strong id="scoreNorm">—</strong></div>
+              <div><span>ציון יישור</span><strong id="scoreAlignment">—</strong></div>
+              <div><span>יישור מלא</span><strong id="scoreFull">—</strong></div>
+            </div>
+
+            <div class="text-comparison">
+              <article class="text-card original-card">
+                <header>
+                  <p>הספר · הטקסט שמולו משווים</p>
+                  <h2 id="sourceTitle">—</h2>
+                  <span id="sourceRef">—</span>
+                </header>
+                <div id="sourceText" class="aligned-text"></div>
+              </article>
+              <article class="text-card candidate-card">
+                <header>
+                  <p>הדאטהסט · הקטע שנמצא</p>
+                  <h2 id="candidateTitle">—</h2>
+                  <span id="candidateRef">—</span>
+                </header>
+                <div id="candidateText" class="aligned-text"></div>
+              </article>
+            </div>
+
+            <div class="alignment-legend" aria-label="מקרא הדגשות">
+              <span><i class="legend-swatch exact"></i> התאמה שסומנה בפלט</span>
+              <span><i class="legend-swatch fuzzy"></i> מילה קשורה/מודגשת</span>
+              <span><i class="legend-swatch neutral"></i> טקסט שאינו מיושר</span>
+            </div>
+
+            <section class="metadata-pair">
+              <article id="originalMetadata" class="metadata-card"></article>
+              <article id="candidateMetadata" class="metadata-card"></article>
+            </section>
+          </section>
+
+          <aside class="pane candidate-pane">
+            <div class="pane-header">
+              <div><p class="pane-kicker">הדאטהסט</p><h2>קטעים לבחירה</h2></div>
+              <span id="candidateListCount" class="count-badge">0 קטעים</span>
+            </div>
+            <div class="pane-selection-bar">
+              <span><b id="selectedCandidateCount">0</b> קטעי דאטהסט נבחרו לסינופסיס</span>
+              <button id="selectTopCandidatesBtn" type="button" class="text-button">בחר מובילים</button>
+              <button id="clearSelectedCandidatesBtn" type="button" class="text-button">נקה</button>
+            </div>
+            <div id="candidateList" class="candidate-list" aria-label="מועמדי הקרבה"></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view-panel synopsis-view" data-view="synopsis">
+        <div class="visualization-header synopsis-page-header">
+          <div>
+            <p class="pane-kicker">השוואה מרובת טקסטים</p>
+            <h2>סינופסיס</h2>
+            <p>קטע אחד מספר המקור מוצג תמיד בעמודה הימנית. משמאלו מוצגים רק המועמדים שנבחרו עבור אותו קטע מתוך הדאטהסט.</p>
+          </div>
+          <div class="visualization-controls synopsis-global-controls">
+            <div class="segmented-control synopsis-mode-switch" role="group" aria-label="מצב הסינופסיס">
+              <button type="button" class="is-active" data-synopsis-mode="single">קטע יחיד</button>
+              <button type="button" data-synopsis-mode="continuous">קריאה רציפה</button>
+            </div>
+            <label class="checkbox-control"><input id="syncSynopsisScrollInput" type="checkbox" checked><span>גלילה מסונכרנת</span></label>
+            <label class="column-width-control"><span>רוחב עמודה</span><input id="synopsisColumnWidthInput" type="range" min="280" max="560" step="20" value="380"></label>
+            <button id="exportSynopsisBtn" type="button" class="secondary-button">ייצוא HTML</button>
+          </div>
+        </div>
+
+        <section class="synopsis-navigation" aria-label="ניווט ובחירה חכמה">
+          <div class="synopsis-record-navigation">
+            <button id="synopsisPrevRecordBtn" type="button" class="icon-button" title="קטע המקור הקודם">↑</button>
+            <label class="synopsis-record-select"><span>קטע מספר המקור</span><select id="synopsisRecordSelect"></select></label>
+            <button id="synopsisNextRecordBtn" type="button" class="icon-button" title="קטע המקור הבא">↓</button>
+            <span id="synopsisRecordPosition" class="selection-status">—</span>
+          </div>
+          <div class="synopsis-smart-controls">
+            <label><span>בחירה חכמה</span><select id="synopsisStrategySelect">
+              <option value="recommended">מומלץ: חוזק וגיוון</option>
+              <option value="strongest">המועמדים החזקים ביותר</option>
+              <option value="onePerBook">מועמד מוביל מכל ספר</option>
+              <option value="onePerDataset">מועמד מוביל מכל דאטהסט</option>
+              <option value="fullAlignment">יישור מלא תחילה</option>
+              <option value="manual">בחירה ידנית בלבד</option>
+            </select></label>
+            <label><span>מועמדים לכל קטע</span><input id="synopsisTopCountInput" type="number" min="1" max="12" value="3"></label>
+            <button id="applySynopsisStrategyBtn" type="button" class="primary-button">בחר עבור הקטע</button>
+            <label class="checkbox-control compact-check"><input id="synopsisAutoApplyInput" type="checkbox" checked><span>בחר מחדש בעת דפדוף</span></label>
+            <label id="continuousCountControl" class="continuous-only" hidden><span>קטעים ברצף</span><input id="continuousPassageCountInput" type="number" min="2" max="30" value="8"></label>
+            <button id="refreshContinuousBtn" type="button" class="secondary-button continuous-only" hidden>עדכן רצף</button>
+          </div>
+        </section>
+
+        <div class="synopsis-layout">
+          <aside class="synopsis-builder pane">
+            <div class="pane-header">
+              <div><p class="pane-kicker">בחירת דאטהסט</p><h2 id="synopsisBuilderTitle">קטעים להשוואה</h2></div>
+              <span id="synopsisSelectionCount" class="count-badge">0 נבחרו</span>
+            </div>
+            <div class="synopsis-builder-tools">
+              <button id="selectSynopsisTopBtn" type="button" class="primary-button">החל בחירה חכמה</button>
+              <button id="selectSynopsisVisibleBtn" type="button" class="secondary-button">בחר את המוצגים</button>
+              <button id="clearSynopsisBtn" type="button" class="text-button">נקה בחירה</button>
+            </div>
+            <div id="synopsisPicker" class="synopsis-picker"></div>
+          </aside>
+
+          <section class="synopsis-stage-card">
+            <div class="synopsis-stage-head">
+              <div>
+                <h3 id="synopsisStageTitle">בחר קטעים מן הדאטהסט להצגה</h3>
+                <p id="synopsisStageNote">קטע הספר קבוע תמיד מימין; הבחירה מן הדאטהסט מסונכרנת עם הקריאה והמסננים הפעילים.</p>
+              </div>
+              <span id="synopsisMetadataProgress" class="metadata-progress"></span>
+            </div>
+            <div id="synopsisGrid" class="synopsis-grid" aria-live="polite"></div>
+            <div id="continuousSynopsis" class="continuous-synopsis" aria-live="polite" hidden></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view-panel" data-view="matrix">
+        <div class="visualization-header">
+          <div>
+            <p class="pane-kicker">מבט רוחב</p>
+            <h2>מפת חום: קטעי הספר מול ספרי הדאטהסט</h2>
+            <p>כל תא מרכז את תוצאות הספר עבור פרק או קטע. לחיצה על תא תחזיר לקריאה הצמודה.</p>
+          </div>
+          <div class="visualization-controls">
+            <label><span>מדד</span><select id="matrixMetricSelect">
+              <option value="maxNorm">ציון מנורמל מרבי</option>
+              <option value="avgNorm">ציון מנורמל ממוצע</option>
+              <option value="count">מספר קטעי דאטהסט</option>
+              <option value="maxScore">score מרבי</option>
+              <option value="exact">התאמות מלאות</option>
+            </select></label>
+            <label><span>רזולוציה</span><select id="matrixGranularitySelect">
+              <option value="chapter">פרקים</option>
+              <option value="segment">קטעים</option>
+            </select></label>
+            <label class="range-control compact-range"><span>מספר ספרים <b id="matrixBooksValue">14</b></span><input id="matrixBooksInput" type="range" min="6" max="24" step="1" value="14"></label>
+          </div>
+        </div>
+        <div id="heatmapContainer" class="heatmap-container"></div>
+      </section>
+
+      <section class="view-panel" data-view="network">
+        <div class="visualization-header">
+          <div>
+            <p class="pane-kicker">קשרים בין ספרים</p>
+            <h2>רשת קו־הופעה של מועמדי הקרבה</h2>
+            <p>שני ספרים מקושרים כאשר שניהם הוצעו כמועמדים לאותו קטע מקור. כך ניתן לזהות אשכולות ולא רק קשרים ישירים לספר המקור.</p>
+          </div>
+          <div class="visualization-controls network-controls">
+            <label><span>סוג רשת</span><select id="networkModeSelect">
+              <option value="cooccurrence">קשרים בין ספרי המועמדים</option>
+              <option value="source">ספר המקור מול ספרי המועמדים</option>
+            </select></label>
+            <label class="range-control network-threshold"><span>סף ציון מנורמל <b id="networkThresholdValue">10%</b></span><input id="networkThresholdInput" type="range" min="0" max="0.95" step="0.05" value="0.1"></label>
+          </div>
+        </div>
+        <div class="network-layout">
+          <div class="svg-card"><svg id="networkSvg"></svg></div>
+          <aside id="networkInspector" class="inspector-card"></aside>
+        </div>
+      </section>
+
+      <section class="view-panel" data-view="scatter">
+        <div class="visualization-header">
+          <div>
+            <p class="pane-kicker">אבחון התוצאות</p>
+            <h2>פיזור: ציון מנורמל מול ציון יישור</h2>
+            <p>כל נקודה היא מועמד אחד מהדאטהסט. ציר X = קרבה כוללת, ציר Y = איכות היישור, וגודל הנקודה = score. לחיצה פותחת את ההשוואה המדויקת.</p>
+          </div>
+          <span id="scatterCount" class="count-badge">0 נקודות</span>
+        </div>
+        <div class="inspector-card scatter-explainer" id="scatterInspector"></div>
+        <div class="svg-card scatter-card"><svg id="scatterSvg"></svg></div>
+      </section>
+
+      <section class="view-panel" data-view="library">
+        <div class="visualization-header">
+          <div>
+            <p class="pane-kicker">קורפוס ההשוואה</p>
+            <h2>קטלוג הספרים והמטא־דאטה מספריא</h2>
+            <p>הטבלה מסכמת את נוכחות כל ספר בתוצאות; הכרטיס מציג מחבר, זמן ומקום חיבור ותיאור מספריא.</p>
+          </div>
+        </div>
+        <div class="library-layout">
+          <div class="table-card">
+            <table class="library-table">
+              <thead><tr><th>ספר</th><th>קטעי ספר</th><th>קטעי דאטהסט</th><th>ציון מרבי</th><th>יישור מלא</th><th>מחבר</th><th>מטא־דאטה</th></tr></thead>
+              <tbody id="libraryTableBody"></tbody>
+            </table>
+          </div>
+          <aside id="bookInspector" class="inspector-card book-inspector"></aside>
+        </div>
+      </section>
+
+      <section class="view-panel" data-view="diagnostics">
+        <div class="visualization-header">
+          <div>
+            <p class="pane-kicker">בקרת איכות</p>
+            <h2>אבחון דאטה</h2>
+            <p>העמוד מאבחן איכות נתונים כללית. בדיקות ספריא הן תת־קבוצה של האבחון כאשר הדאטה הוא מסוג ספריא.</p>
+          </div>
+          <div class="visualization-controls">
+            <label><span>דגימות לכל ספר</span><input id="diagnosticSampleInput" type="number" min="1" max="5" value="1"></label>
+            <label><span>סוג בדיקה</span><select id="diagnosticModeSelect">
+              <option value="all">הכול</option>
+              <option value="sefariaOnly">ספריא בלבד</option>
+              <option value="nonSefariaOnly">לא-ספריא בלבד</option>
+            </select></label>
+            <button id="runDiagnosticsBtn" type="button" class="primary-button">בדוק דגימות</button>
+          </div>
+        </div>
+        <div class="diagnostic-summary" id="diagnosticSummary"></div>
+        <div class="table-card diagnostic-table-card">
+          <table class="diagnostic-table">
+            <thead><tr><th>מאגר</th><th>ספר / מיקום</th><th>תבנית שנוצרה</th><th>תוצאה</th><th>שיטת פתרון</th><th>הסבר</th></tr></thead>
+            <tbody id="diagnosticTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="sourceDialog" class="source-dialog">
+    <form method="dialog" class="source-dialog-card">
+      <div class="source-dialog-head">
+        <div>
+          <p class="pane-kicker">מקורות נתונים</p>
+          <h2>איזה קובצי JSON לטעון?</h2>
+          <p>אפשר לבחור קובץ אחד או כמה. קבצים שכבר נטענו יישארו זמינים וניתן להפעיל או להסתיר אותם בכל עת.</p>
+        </div>
+        <button id="closeSourceDialogBtn" class="icon-button" value="cancel" type="submit" aria-label="סגירה">×</button>
+      </div>
+      <div class="source-dialog-tools">
+        <button id="refreshSourcesBtn" type="button" class="text-button">רענון הרשימה</button>
+        <button id="selectAllSourcesBtn" type="button" class="text-button">בחר הכול</button>
+        <button id="clearSourceSelectionBtn" type="button" class="text-button">נקה בחירה</button>
+        <button id="addLocalFilesBtn" type="button" class="secondary-button">הוסף קבצים מהמחשב</button>
+      </div>
+      <div id="sourcePickerList" class="source-picker-list"></div>
+      <p id="sourcePickerNote" class="small-note"></p>
+      <div class="source-dialog-actions">
+        <button id="applySourceSelectionBtn" type="button" class="primary-button">טען את הנבחרים</button>
+        <button type="submit" value="cancel" class="secondary-button">ביטול</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="loadingOverlay" class="loading-overlay" hidden>
+    <div class="loading-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2 id="loadingTitle">טוען</h2>
+      <p id="loadingDetail"></p>
+      <div class="progress-track"><span id="loadingProgress"></span></div>
+      <button id="loadingDismissBtn" class="secondary-button loading-dismiss" type="button" hidden>הצג את המערכת</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden role="status"></div>
+
+  <script src="config.js" defer></script>
+  <script src="i18n.js" defer></script>
+  <script src="utils.js" defer></script>
+  <script src="ref-templates.js" defer></script>
+  <script src="data-model.js" defer></script>
+  <script src="sefaria.js" defer></script>
+  <script src="visualizations.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
