@@ -252,6 +252,33 @@ TR.GenizahService = class GenizahService {
     return '';
   }
 
+  inferPageNumberFromCanvas(canvases, canvas, fallback = 1) {
+    if (Array.isArray(canvases) && canvas) {
+      const index = canvases.findIndex(entry => entry === canvas);
+      if (index >= 0) return index + 1;
+    }
+    const label = String(canvas?.label || '');
+    const labelMatch = label.match(/(\d+)/);
+    const pageFromLabel = parseInt(labelMatch?.[1] || '', 10);
+    if (Number.isFinite(pageFromLabel) && pageFromLabel > 0) return pageFromLabel;
+    const fallbackNum = parseInt(String(fallback || ''), 10);
+    return Number.isFinite(fallbackNum) && fallbackNum > 0 ? fallbackNum : 1;
+  }
+
+  buildOpenLibraryImageCandidates(ie, pageNumber) {
+    const normalizedIe = this.normalizeIe(ie);
+    const pageNum = parseInt(String(pageNumber || ''), 10);
+    if (!normalizedIe || !Number.isFinite(pageNum) || pageNum <= 0) return [];
+
+    const plain = String(pageNum);
+    const padded = plain.padStart(6, '0');
+    const base = `https://api.nli.org.il/openlibrary/api/iiif/${normalizedIe}!`;
+    return Array.from(new Set([
+      `${base}${padded}/full/800,/0/default.jpg`,
+      `${base}${plain}/full/800,/0/default.jpg`
+    ]));
+  }
+
   metadataValue(manifest, label) {
     const items = Array.isArray(manifest?.metadata) ? manifest.metadata : [];
     const found = items.find(item => String(item?.label || '').toLowerCase().includes(String(label).toLowerCase()));
@@ -349,7 +376,7 @@ TR.GenizahService = class GenizahService {
     return result;
   }
 
-  async resolveImageUrl(metadata) {
+  async resolveImageUrlCandidates(metadata) {
     if (!metadata?.item) {
       throw new Error('Missing Genizah metadata for image retrieval.');
     }
@@ -357,7 +384,12 @@ TR.GenizahService = class GenizahService {
 
     const item = metadata.item;
     const cacheKey = `${metadata.lookupMode || 'unknown'}:${item.geniza_ie || ''}:${item.alma || ''}:${item.page || ''}`;
-    if (this.imageUrlCache.has(cacheKey)) return this.imageUrlCache.get(cacheKey);
+    const candidates = [];
+    const addCandidate = url => {
+      const value = String(url || '').trim();
+      if (value) candidates.push(value);
+    };
+    if (this.imageUrlCache.has(cacheKey)) addCandidate(this.imageUrlCache.get(cacheKey));
 
     if (metadata.lookupMode === 'remote-manifest') {
       const alma = String(item.alma || '').trim();
@@ -370,9 +402,16 @@ TR.GenizahService = class GenizahService {
       if (!flId) throw new Error('Could not extract FL_ID from remote canvas id.');
       const imageUrl = this.imageUrlFromCanvas(canvas) || this.applyTemplate(this.templates.iiif_image_url_template, { FL_ID: flId });
       if (!imageUrl) throw new Error('Image URL template is missing.');
-      this.imageUrlCache.set(cacheKey, imageUrl);
-      this.persistCaches();
-      return imageUrl;
+      addCandidate(imageUrl);
+      const pageNumber = this.inferPageNumberFromCanvas(canvases, canvas, 1);
+      const ieForFallback = metadata.ie || item.geniza_ie || '';
+      this.buildOpenLibraryImageCandidates(ieForFallback, pageNumber).forEach(addCandidate);
+      const unique = Array.from(new Set(candidates));
+      if (unique[0]) {
+        this.imageUrlCache.set(cacheKey, unique[0]);
+        this.persistCaches();
+      }
+      return unique;
     }
 
     const alma = String(item.alma || '').trim();
@@ -391,10 +430,25 @@ TR.GenizahService = class GenizahService {
     const imageTemplates = this.buildImageTemplateCandidates(item);
     const imageUrl = this.applyTemplate(imageTemplates[0], { FL_ID: flId });
     if (!imageUrl) throw new Error('Image URL template is missing.');
+    addCandidate(imageUrl);
+    const pageNumber = pageIndex + 1;
+    const ieForFallback = metadata.ie || item.geniza_ie || '';
+    this.buildOpenLibraryImageCandidates(ieForFallback, pageNumber).forEach(addCandidate);
 
-    this.imageUrlCache.set(cacheKey, imageUrl);
-    this.persistCaches();
-    return imageUrl;
+    const unique = Array.from(new Set(candidates));
+    if (unique[0]) {
+      this.imageUrlCache.set(cacheKey, unique[0]);
+      this.persistCaches();
+    }
+    return unique;
+  }
+
+  async resolveImageUrl(metadata) {
+    const candidates = await this.resolveImageUrlCandidates(metadata);
+    if (!candidates.length) {
+      throw new Error('No image URL candidates were produced for this item.');
+    }
+    return candidates[0];
   }
 
   buildManifestUrlCandidates(alma, item) {

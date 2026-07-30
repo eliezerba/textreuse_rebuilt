@@ -1207,28 +1207,46 @@ TR.app = (() => {
     openDialogSafely(els.genizahImageDialog);
 
     try {
-      const imageUrl = await genizah.resolveImageUrl(metadata);
+      const imageUrls = await genizah.resolveImageUrlCandidates(metadata);
+      if (!Array.isArray(imageUrls) || !imageUrls.length) {
+        throw new Error('לא נמצאו כתובות תמונה מתאימות לפריט זה.');
+      }
       if (!els.genizahImageDialog.open) return;
-      await new Promise((resolve, reject) => {
-        const onLoad = () => {
-          cleanup();
-          resolve();
-        };
-        const onError = () => {
-          cleanup();
-          reject(new Error('קובץ התמונה לא נטען משרת IIIF.'));
-        };
-        const cleanup = () => {
-          els.genizahImage.removeEventListener('load', onLoad);
-          els.genizahImage.removeEventListener('error', onError);
-        };
-        els.genizahImage.addEventListener('load', onLoad, { once: true });
-        els.genizahImage.addEventListener('error', onError, { once: true });
-        els.genizahImage.src = imageUrl;
-      });
+      let loadedImageUrl = '';
+      for (let index = 0; index < imageUrls.length; index += 1) {
+        const candidateUrl = imageUrls[index];
+        els.genizahImageStatus.textContent = `מנסה לטעון תמונה (${index + 1}/${imageUrls.length})…`;
+        try {
+          await new Promise((resolve, reject) => {
+            const onLoad = () => {
+              cleanup();
+              resolve();
+            };
+            const onError = () => {
+              cleanup();
+              reject(new Error('קובץ התמונה לא נטען משרת IIIF.'));
+            };
+            const cleanup = () => {
+              els.genizahImage.removeEventListener('load', onLoad);
+              els.genizahImage.removeEventListener('error', onError);
+            };
+            els.genizahImage.addEventListener('load', onLoad, { once: true });
+            els.genizahImage.addEventListener('error', onError, { once: true });
+            els.genizahImage.src = candidateUrl;
+          });
+          loadedImageUrl = candidateUrl;
+          break;
+        } catch {
+          // Try the next known image source.
+        }
+      }
+
+      if (!loadedImageUrl) {
+        throw new Error('קובץ התמונה לא נטען מאף מקור זמין.');
+      }
       if (!els.genizahImageDialog.open) return;
       els.genizahImage.hidden = false;
-      els.openGenizahImageExternalLink.href = imageUrl;
+      els.openGenizahImageExternalLink.href = loadedImageUrl;
       els.openGenizahImageExternalLink.hidden = false;
       els.genizahImageStatus.textContent = 'התמונה נטענה בהצלחה.';
     } catch (error) {
