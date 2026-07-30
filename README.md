@@ -27,6 +27,46 @@
 3. לחץ פעמיים על `start_server.bat`.
 4. השרת יתחיל בדרך כלל ב־`http://localhost:8765`. אם הפורט תפוס, הוא יעבור אוטומטית לפורט פנוי אחר ויפתח את הכתובת הנכונה.
 
+## הפעלה דרך GitHub Pages עם קובצי JSON ב־Google Drive
+
+כאשר האתר רץ ב־GitHub Pages, קריאה ישירה ל־Google Drive נחסמת לרוב על ידי CORS. לכן יש להשתמש ב־Web App קטן של Google Apps Script שמחזיר:
+
+- רשימת קובצי JSON בתיקייה;
+- קריאת קובץ JSON לפי מזהה קובץ.
+
+### צעד 1: יצירת Web App
+
+1. פתח Google Apps Script וצור פרויקט חדש.
+2. העתק את תוכן הקובץ `google_drive_proxy_apps_script.gs`.
+3. ודא שהקבוע `FOLDER_ID` מצביע על תיקיית ה־Drive שלך.
+4. פרוס כ־Web App:
+	 - Execute as: `Me`
+	 - Who has access: `Anyone`
+5. העתק את כתובת ה־Web App שיצאה בפריסה.
+
+### צעד 2: חיבור ה־endpoint במערכת
+
+בקובץ `config.js`, עדכן את:
+
+- `remoteSources.endpoint` לערך של כתובת ה־Web App.
+
+לדוגמה:
+
+```js
+remoteSources: {
+	endpoint: 'https://script.google.com/macros/s/XXXXXXXXXXXX/exec',
+	label: 'Google Drive',
+	listAction: 'list',
+	fileAction: 'file'
+}
+```
+
+### צעד 3: פרסום מחדש ב־GitHub
+
+בצע commit + push, ולאחר מכן רענן את אתר GitHub Pages. חלון בחירת המקורות יציג גם קבצים שמגיעים מ־Google Drive.
+
+הערה: בקבצי JSON גדולים מאוד, זמן טעינה ופענוח בדפדפן עלול להיות ארוך. במקרה כזה מומלץ לפצל לקבצים לפי ספר/קטגוריה.
+
 ## טעינת כמה מאגרים
 
 - קובץ יחיד בתיקייה נטען אוטומטית.

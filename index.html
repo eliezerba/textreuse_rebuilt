@@ -125,11 +125,22 @@
               <option value="vrrManuscript">VRR לפי כתב־יד</option>
             </select></label>
             <label><span>בחירה</span><select id="reverseBookSelect"></select></label>
+            <label><span>מיון</span><select id="reverseOrderSelect">
+              <option value="source">לפי סדר ספר המקור</option>
+              <option value="score">לפי ציון</option>
+            </select></label>
             <label><span>כמה קטעים להציג</span><input id="reverseTopInput" type="number" min="3" max="120" value="30"></label>
             <button id="reverseRefreshBtn" type="button" class="primary-button">עדכן</button>
           </div>
         </div>
         <div id="reverseSummary" class="filter-summary"></div>
+        <div class="reverse-sequence-bar">
+          <span id="reverseSequenceInfo" class="selection-status">—</span>
+          <button id="reverseToggleSequenceLockBtn" type="button" class="text-button">נעילה: כבוי</button>
+          <button id="reverseOpenSequenceBtn" type="button" class="secondary-button">פתח מופע ראשון</button>
+          <button id="reversePrevSequenceBtn" type="button" class="text-button">קודם</button>
+          <button id="reverseNextSequenceBtn" type="button" class="text-button">הבא</button>
+        </div>
         <div class="reverse-layout">
           <section class="table-card reverse-table-card">
             <table class="diagnostic-table reverse-table">
@@ -334,6 +345,7 @@
             <label><span>סוג רשת</span><select id="networkModeSelect">
               <option value="cooccurrence">קשרים בין ספרי המועמדים</option>
               <option value="source">ספר המקור מול ספרי המועמדים</option>
+              <option value="sourceGeniza">ספר המקור מול כתבי־יד גניזה (NLI)</option>
             </select></label>
             <label class="range-control network-threshold"><span>סף ציון מנורמל <b id="networkThresholdValue">10%</b></span><input id="networkThresholdInput" type="range" min="0" max="0.95" step="0.05" value="0.1"></label>
           </div>
@@ -429,6 +441,26 @@
     </form>
   </dialog>
 
+  <dialog id="genizahImageDialog" class="source-dialog genizah-image-dialog">
+    <form method="dialog" class="source-dialog-card genizah-image-dialog-card">
+      <div class="source-dialog-head">
+        <div>
+          <p class="pane-kicker">Genizah Image</p>
+          <h2 id="genizahImageTitle">תמונת קטע גניזה</h2>
+          <p id="genizahImageStatus">טוען תמונה…</p>
+        </div>
+        <button id="closeGenizahImageDialogBtn" class="icon-button" value="cancel" type="submit" aria-label="סגירה">×</button>
+      </div>
+      <div class="genizah-image-frame">
+        <img id="genizahImage" alt="תמונת קטע גניזה" hidden>
+      </div>
+      <div class="source-dialog-actions">
+        <a id="openGenizahImageExternalLink" class="secondary-button" href="#" target="_blank" rel="noopener" hidden>פתח תמונה בלשונית חדשה</a>
+        <button type="submit" value="cancel" class="primary-button">סגירה</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="loadingOverlay" class="loading-overlay" hidden>
     <div class="loading-card">
       <div class="spinner" aria-hidden="true"></div>
@@ -447,6 +479,7 @@
   <script src="ref-templates.js" defer></script>
   <script src="data-model.js" defer></script>
   <script src="sefaria.js" defer></script>
+  <script src="genizah.js" defer></script>
   <script src="visualizations.js" defer></script>
   <script src="app.js" defer></script>
 </body>

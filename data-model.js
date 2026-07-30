@@ -686,6 +686,91 @@ TR.DataModel = class DataModel {
     return { nodes, edges: edges.filter(edge => finalIds.has(edge.source) && finalIds.has(edge.target)).slice(0, 90) };
   }
 
+  buildSourceToGenizaGraph({ minNorm = 0.1, maxNodes = TR.config.maxNetworkNodes, filters = {} } = {}) {
+    const nodeMap = new Map();
+    const edgeMap = new Map();
+
+    const ensureNode = (id, title, { isSource = false, book = null } = {}) => {
+      if (!id) return null;
+      let node = nodeMap.get(id);
+      if (!node) {
+        node = {
+          id,
+          title,
+          count: 0,
+          strength: 0,
+          color: isSource ? '#17212b' : TR.utils.hashColor(id),
+          isSource,
+          book
+        };
+        nodeMap.set(id, node);
+      }
+      node.isSource = node.isSource || isSource;
+      if (node.isSource) node.color = '#17212b';
+      return node;
+    };
+
+    for (const record of this.records) {
+      const sourceNode = ensureNode(record.sourceBook.slug, record.sourceBook.title, {
+        isSource: true,
+        book: this.bookMap.get(record.sourceBook.slug) || null
+      });
+      sourceNode.count += 1;
+      sourceNode.strength += 1;
+
+      const bestByManuscript = new Map();
+      const candidates = this.getCandidates(record.id, { ...filters, minNorm: Math.max(minNorm, TR.utils.finite(filters.minNorm)) });
+      for (const candidate of candidates) {
+        if (candidate.isSelf || candidate.sourceFamily !== 'geniza') continue;
+        const manuscript = candidate.sourceManuscript || candidate.bookSlug;
+        if (!manuscript) continue;
+        const previous = bestByManuscript.get(manuscript);
+        if (!previous || candidate.normScore > previous.normScore) bestByManuscript.set(manuscript, candidate);
+      }
+
+      for (const [manuscript, candidate] of bestByManuscript.entries()) {
+        const targetNode = ensureNode(manuscript, `Geniza NLI · ${manuscript}`, {
+          isSource: false,
+          book: this.bookMap.get(manuscript) || null
+        });
+        targetNode.count += 1;
+        targetNode.strength += candidate.normScore;
+
+        const key = `${record.sourceBook.slug}::${manuscript}`;
+        const edge = edgeMap.get(key) || {
+          source: record.sourceBook.slug,
+          target: manuscript,
+          count: 0,
+          strength: 0,
+          recordIds: []
+        };
+        edge.count += 1;
+        edge.strength += candidate.normScore;
+        edge.recordIds.push(record.id);
+        edgeMap.set(key, edge);
+      }
+    }
+
+    const edges = [...edgeMap.values()].sort((a, b) => b.count - a.count || b.strength - a.strength);
+    const allowedIds = new Set();
+    edges.slice(0, Math.max(1, maxNodes * 3)).forEach(edge => {
+      allowedIds.add(edge.source);
+      allowedIds.add(edge.target);
+    });
+    this.targetBooks.forEach(book => allowedIds.add(book.slug));
+
+    const nodes = [...nodeMap.values()]
+      .filter(node => allowedIds.has(node.id))
+      .sort((a, b) => Number(b.isSource) - Number(a.isSource) || b.count - a.count)
+      .slice(0, maxNodes);
+    const finalIds = new Set(nodes.map(node => node.id));
+
+    return {
+      nodes,
+      edges: edges.filter(edge => finalIds.has(edge.source) && finalIds.has(edge.target)).slice(0, 90)
+    };
+  }
+
   getScatterPoints({ filters = {}, maxPoints = TR.config.maxScatterPoints } = {}) {
     const points = [];
     for (const record of this.records) {
@@ -744,7 +829,7 @@ TR.DataModel = class DataModel {
     return { key: candidate.bookSlug, title: candidate.bookTitle };
   }
 
-  getReverseMatches({ mode = 'book', groupKey = '', limit = 30, filters = {} } = {}) {
+  getReverseMatches({ mode = 'book', groupKey = '', limit = 30, orderBy = 'source', filters = {} } = {}) {
     const maxRows = TR.utils.clamp(Number(limit) || 30, 3, 120);
     const byRecord = new Map();
     for (const record of this.records) {
@@ -766,7 +851,12 @@ TR.DataModel = class DataModel {
       }
     }
     const rows = [...byRecord.values()]
-      .sort((a, b) => b.bestNorm - a.bestNorm || b.bestAlignment - a.bestAlignment || b.bestScore - a.bestScore)
+      .sort((a, b) => {
+        if (orderBy === 'score') {
+          return b.bestNorm - a.bestNorm || b.bestAlignment - a.bestAlignment || b.bestScore - a.bestScore;
+        }
+        return TR.DataModel.compareSourceRecords(a.record, b.record);
+      })
       .slice(0, maxRows);
 
     const chapterGroups = new Map();
@@ -779,10 +869,12 @@ TR.DataModel = class DataModel {
       chapterGroups.set(chapterKey, chapter);
     }
 
+    const sourceOrder = new Map(this.records.map((record, index) => [record.id, index]));
     const heatRows = [...chapterGroups.values()].map(chapter => ({
       key: chapter.key,
       label: chapter.label,
       recordIds: chapter.recordIds,
+      sortIndex: Math.min(...chapter.recordIds.map(recordId => sourceOrder.get(recordId) ?? Number.MAX_SAFE_INTEGER)),
       cells: [{
         book: { slug: groupKey, title: groupKey },
         value: chapter.value,
@@ -792,7 +884,13 @@ TR.DataModel = class DataModel {
           exact: 0
         }
       }]
-    }));
+    })).sort((a, b) => {
+      if (orderBy === 'score') {
+        return b.cells[0].value - a.cells[0].value || b.cells[0].stats.count - a.cells[0].stats.count;
+      }
+      return a.sortIndex - b.sortIndex;
+    })
+      .map(({ sortIndex, ...row }) => row);
 
     return {
       rows,

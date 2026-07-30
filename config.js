@@ -3,6 +3,17 @@ window.TR = window.TR || {};
 TR.config = Object.freeze({
   appName: 'מפת שימוש חוזר בטקסט',
   defaultJson: 'Kav_HaYashar.json',
+  remoteSources: {
+    endpoint: '',
+    label: 'Google Drive',
+    listAction: 'list',
+    fileAction: 'file'
+  },
+  genizah: {
+    itemsPath: 'Genizah_Data/geniza_items_with_image_links.json',
+    domainsPath: 'Genizah_Data/friedberg_domains.json',
+    templatesPath: 'Genizah_Data/image_url_templates.json'
+  },
   sefariaBase: 'https://www.sefaria.org',
   maxBookMetadataConcurrency: 5,
   maxNetworkNodes: 24,

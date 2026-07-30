@@ -25,6 +25,8 @@ TR.app = (() => {
     passageMetadata: new Map(),
     metadataRequestId: 0,
     metadataRunId: 0,
+    genizahRequestId: 0,
+    activeGenizahMetadata: null,
     visibleRecords: [],
     loading: false,
     loadingFallbackTimer: null,
@@ -49,12 +51,21 @@ TR.app = (() => {
     reverse: {
       mode: 'book',
       groupKey: '',
-      topCount: 30
+      topCount: 30,
+      orderBy: 'source',
+      sequenceRecordIds: [],
+      sequenceIndex: -1,
+      sequenceLocked: false
+    },
+    genizahWarmup: {
+      signature: '',
+      running: false
     }
   };
 
   const els = {};
   const sefaria = new TR.SefariaService();
+  const genizah = new TR.GenizahService(TR.config.genizah || {});
   const t = (he, en) => (TR.i18n?.t ? TR.i18n.t(he, en) : he);
 
   function init() {
@@ -87,6 +98,7 @@ TR.app = (() => {
       'activeFilterSummary', 'loadingDismissBtn', 'sourceDialog', 'sourcePickerList', 'sourcePickerNote',
       'refreshSourcesBtn', 'selectAllSourcesBtn', 'clearSourceSelectionBtn', 'addLocalFilesBtn',
       'applySourceSelectionBtn', 'closeSourceDialogBtn',
+      'genizahImageDialog', 'genizahImageTitle', 'genizahImageStatus', 'genizahImage', 'openGenizahImageExternalLink', 'closeGenizahImageDialogBtn',
       'addActiveCandidateBtn', 'openSynopsisBtn', 'synopsisQuickCount', 'selectedCandidateCount',
       'selectTopCandidatesBtn', 'clearSelectedCandidatesBtn',
       'synopsisTabCount', 'syncSynopsisScrollInput',
@@ -97,8 +109,9 @@ TR.app = (() => {
       'synopsisStrategySelect', 'applySynopsisStrategyBtn', 'synopsisAutoApplyInput',
       'continuousCountControl', 'continuousPassageCountInput', 'refreshContinuousBtn', 'continuousSynopsis',
       'diagnosticSampleInput', 'runDiagnosticsBtn', 'diagnosticSummary', 'diagnosticTableBody'
-      , 'langToggleBtn', 'reverseDatasetModeSelect', 'reverseBookSelect', 'reverseTopInput',
+      , 'langToggleBtn', 'reverseDatasetModeSelect', 'reverseBookSelect', 'reverseOrderSelect', 'reverseTopInput',
       'reverseRefreshBtn', 'reverseSummary', 'reverseTableBody', 'reverseHeatmapContainer', 'reverseHeatTitle',
+      'reverseSequenceInfo', 'reverseOpenSequenceBtn', 'reversePrevSequenceBtn', 'reverseNextSequenceBtn', 'reverseToggleSequenceLockBtn',
       'diagnosticModeSelect', 'scatterInspector'
     ];
     ids.forEach(id => { els[id] = document.getElementById(id); });
@@ -182,6 +195,17 @@ TR.app = (() => {
     els.resetFiltersBtn.addEventListener('click', resetFilters);
     els.exportCsvBtn.addEventListener('click', exportCsv);
     els.retryMetadataBtn.addEventListener('click', hydrateBookMetadata);
+    els.candidateMetadata.addEventListener('click', event => {
+      if (event.target.closest('[data-open-genizah-image]')) openGenizahImageDialog();
+    });
+    if (els.genizahImageDialog) {
+      els.genizahImageDialog.addEventListener('close', () => {
+        els.genizahImage.removeAttribute('src');
+        els.genizahImage.hidden = true;
+        els.openGenizahImageExternalLink.hidden = true;
+        els.genizahImageStatus.textContent = 'טוען תמונה…';
+      });
+    }
 
     els.prevRecordBtn.addEventListener('click', () => stepRecord(-1));
     els.nextRecordBtn.addEventListener('click', () => stepRecord(1));
@@ -244,6 +268,11 @@ TR.app = (() => {
       renderReverse();
       savePreferences();
     });
+    els.reverseOrderSelect.addEventListener('change', () => {
+      state.reverse.orderBy = els.reverseOrderSelect.value;
+      renderReverse();
+      savePreferences();
+    });
     els.reverseTopInput.addEventListener('change', () => {
       state.reverse.topCount = TR.utils.clamp(Number(els.reverseTopInput.value) || 30, 3, 120);
       els.reverseTopInput.value = String(state.reverse.topCount);
@@ -251,6 +280,15 @@ TR.app = (() => {
       savePreferences();
     });
     els.reverseRefreshBtn.addEventListener('click', () => renderReverse());
+    els.reverseOpenSequenceBtn.addEventListener('click', () => openReverseSequenceAt(0));
+    els.reversePrevSequenceBtn.addEventListener('click', () => openReverseSequenceAt(state.reverse.sequenceIndex - 1));
+    els.reverseNextSequenceBtn.addEventListener('click', () => openReverseSequenceAt(state.reverse.sequenceIndex + 1));
+    els.reverseToggleSequenceLockBtn.addEventListener('click', () => {
+      state.reverse.sequenceLocked = !state.reverse.sequenceLocked;
+      renderReverseSequenceBar();
+      savePreferences();
+      showToast(state.reverse.sequenceLocked ? 'נעילת רצף הופעלה.' : 'נעילת רצף בוטלה.', 'info');
+    });
 
     els.tabs.forEach(tab => tab.addEventListener('click', () => setView(tab.dataset.view)));
 
@@ -291,23 +329,29 @@ TR.app = (() => {
 
   async function discoverAndStart() {
     setLoading(true, 'מאתר קובצי JSON', 'סורק את תיקיית המערכת…', 8);
-    try {
-      const serverSources = await discoverServerSources();
-      setLoading(false);
-      if (serverSources.length === 1) {
-        state.pickerSelection = new Set([serverSources[0].id]);
-        await loadSelectedSources([serverSources[0].id]);
-      } else if (serverSources.length > 1) {
-        state.pickerSelection = new Set(state.activeSourceIds);
-        renderSourcePicker();
-        showEmptyState(`נמצאו ${serverSources.length} קובצי JSON. בחר קובץ אחד או כמה לטעינה.`);
-        openDialogSafely();
-      } else {
+    const [serverResult, remoteResult] = await Promise.allSettled([
+      discoverServerSources(),
+      discoverRemoteSources()
+    ]);
+    const serverSources = serverResult.status === 'fulfilled' ? serverResult.value : [];
+    const remoteSources = remoteResult.status === 'fulfilled' ? remoteResult.value : [];
+    const allSources = [...serverSources, ...remoteSources];
+
+    setLoading(false);
+    if (allSources.length === 1) {
+      state.pickerSelection = new Set([allSources[0].id]);
+      await loadSelectedSources([allSources[0].id]);
+    } else if (allSources.length > 1) {
+      state.pickerSelection = new Set(state.activeSourceIds);
+      renderSourcePicker();
+      showEmptyState(`נמצאו ${allSources.length} קובצי JSON. בחר קובץ אחד או כמה לטעינה.`);
+      openDialogSafely(els.sourceDialog);
+    } else {
+      try {
         await attemptLegacyDefault();
+      } catch {
+        showEmptyState('לא נמצאו קובצי JSON באופן אוטומטי. אפשר לבחור כמה קבצים מהמחשב.');
       }
-    } catch (error) {
-      setLoading(false);
-      showEmptyState('לא נמצאו קובצי JSON באופן אוטומטי. אפשר לבחור כמה קבצים מהמחשב.');
     }
   }
 
@@ -334,6 +378,50 @@ TR.app = (() => {
     return sources.map(item => state.sources.get(`server:${item.name}`));
   }
 
+  async function discoverRemoteSources() {
+    const remoteCfg = TR.config.remoteSources || {};
+    const endpoint = String(remoteCfg.endpoint || '').trim();
+    if (!endpoint) return [];
+
+    const listAction = remoteCfg.listAction || 'list';
+    const originLabel = remoteCfg.label || 'Google Drive';
+    const listUrl = appendQueryParam(endpoint, 'action', listAction);
+    const response = await fetch(listUrl, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const payload = await response.json();
+    const files = Array.isArray(payload.files) ? payload.files : [];
+    const mapped = [];
+    for (const item of files) {
+      const fileId = String(item.id || '').trim();
+      const fileName = String(item.name || item.label || '').trim();
+      if (!fileId || !fileName) continue;
+      const fallbackUrl = appendQueryParam(appendQueryParam(endpoint, 'action', remoteCfg.fileAction || 'file'), 'id', fileId);
+      const sourceUrl = String(item.url || item.downloadUrl || fallbackUrl);
+      const id = `remote:${fileId}`;
+      const existing = state.sources.get(id);
+      state.sources.set(id, {
+        ...existing,
+        id,
+        label: fileName,
+        origin: 'remote',
+        originLabel,
+        url: sourceUrl,
+        size: Number(item.size || 0),
+        modified: item.modified || item.modifiedTime || null,
+        model: existing?.model || null,
+        error: null
+      });
+      mapped.push(state.sources.get(id));
+    }
+    return mapped;
+  }
+
+  function appendQueryParam(url, key, value) {
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+  }
+
   async function attemptLegacyDefault() {
     try {
       const response = await fetch(TR.config.defaultJson, { cache: 'no-store' });
@@ -342,22 +430,23 @@ TR.app = (() => {
       state.sources.set(id, { id, label: TR.config.defaultJson, origin: 'server', url: TR.config.defaultJson, size: 0, model: null, error: null });
       await loadSelectedSources([id]);
     } catch {
-      showEmptyState('לא נמצאו קובצי JSON בתיקייה. אפשר לבחור קובץ אחד או כמה מהמחשב.');
+      throw new Error('Legacy default JSON not found');
     }
   }
 
   async function openSourceDialog() {
-    try { await discoverServerSources(); } catch { /* Direct file mode has no discovery API. */ }
+    await Promise.allSettled([discoverServerSources(), discoverRemoteSources()]);
     state.pickerSelection = new Set(state.activeSourceIds.size ? state.activeSourceIds : []);
     renderSourcePicker();
-    openDialogSafely();
+    openDialogSafely(els.sourceDialog);
   }
 
-  function openDialogSafely() {
-    if (typeof els.sourceDialog.showModal === 'function') {
-      if (!els.sourceDialog.open) els.sourceDialog.showModal();
+  function openDialogSafely(dialogEl) {
+    if (!dialogEl) return;
+    if (typeof dialogEl.showModal === 'function') {
+      if (!dialogEl.open) dialogEl.showModal();
     } else {
-      els.sourceDialog.setAttribute('open', '');
+      dialogEl.setAttribute('open', '');
     }
   }
 
@@ -378,12 +467,18 @@ TR.app = (() => {
         <input type="checkbox" data-source-id="${TR.utils.escapeHtml(source.id)}" ${state.pickerSelection.has(source.id) ? 'checked' : ''}>
         <span class="source-picker-main">
           <b>${TR.utils.escapeHtml(source.label)}</b>
-          <small>${source.origin === 'server' ? 'בתיקיית המערכת' : 'קובץ מהמחשב'}${source.size ? ` · ${formatBytes(source.size)}` : ''}</small>
+          <small>${sourceOriginLabel(source)}${source.size ? ` · ${formatBytes(source.size)}` : ''}</small>
           ${source.error ? `<em>${TR.utils.escapeHtml(source.error)}</em>` : ''}
         </span>
         <span class="source-state ${source.model ? 'is-loaded' : ''}">${source.model ? 'נטען' : 'ממתין'}</span>
       </label>`).join('');
     updatePickerNote();
+  }
+
+  function sourceOriginLabel(source) {
+    if (source.origin === 'server') return 'בתיקיית המערכת';
+    if (source.origin === 'remote') return source.originLabel || 'מקור מרוחק';
+    return 'קובץ מהמחשב';
   }
 
   function updatePickerNote() {
@@ -486,6 +581,9 @@ TR.app = (() => {
     state.activeCandidateId = null;
     state.passageMetadata.clear();
     state.network.selected = null;
+    state.reverse.sequenceRecordIds = [];
+    state.reverse.sequenceIndex = -1;
+    state.reverse.sequenceLocked = false;
     cleanupSynopsisSelections();
     state.diagnostics.results = [];
     state.activeView = 'read';
@@ -493,6 +591,34 @@ TR.app = (() => {
     refreshReverseOptions(true);
     syncControlsFromState();
     setView('read');
+    scheduleGenizahWarmup();
+  }
+
+  function scheduleGenizahWarmup() {
+    if (!state.model) return;
+    const signature = [...state.activeSourceIds].sort().join('|');
+    if (!signature || state.genizahWarmup.running || state.genizahWarmup.signature === signature) return;
+    state.genizahWarmup.running = true;
+    state.genizahWarmup.signature = signature;
+
+    const candidates = state.model.records.flatMap(record => record.candidates).filter(candidate => candidate.sourceFamily === 'geniza');
+    const uniqueCount = new Set(candidates.map(candidate => candidate.sourceLocation)).size;
+    if (!uniqueCount) {
+      state.genizahWarmup.running = false;
+      return;
+    }
+
+    showToast(`מכין cache גניזה ברקע (${uniqueCount} הפניות)…`, 'info');
+    setTimeout(async () => {
+      try {
+        const result = await genizah.warmupForCandidates(candidates);
+        showToast(`cache גניזה מוכן: ${result.done}/${result.total}${result.errors ? ` · שגיאות: ${result.errors}` : ''}`, result.errors ? 'info' : 'success');
+      } catch (error) {
+        showToast(`warmup גניזה נכשל: ${error.message}`, 'error');
+      } finally {
+        state.genizahWarmup.running = false;
+      }
+    }, 80);
   }
 
   function configureDatasetControls() {
@@ -813,6 +939,7 @@ TR.app = (() => {
       setMetricCards(null);
       els.originalMetadata.innerHTML = metadataPlaceholder('מטא־דאטה של קטע הספר');
       els.candidateMetadata.innerHTML = metadataPlaceholder('מטא־דאטה של הקטע מן הדאטהסט');
+      renderGenizahMetadata(null, null);
       els.alignmentNote.textContent = 'שנה את המסננים כדי להציג השוואה.';
       els.addActiveCandidateBtn.disabled = true;
       renderSynopsisIndicators();
@@ -826,7 +953,7 @@ TR.app = (() => {
     els.alignmentNote.textContent = candidate.hasDetailedAlignment
       ? 'אותו צבע מוצג בשני הטקסטים לפי רצף היישור המפורט שסיפקה מערכת TEXTREUSE.'
       : 'סימוני ה־HTML של TEXTREUSE הועברו גם לטקסט המקור באמצעות יישור המילים, כדי להציג צבע מקביל בשני הצדדים.';
-    renderMetadataLoading();
+    renderMetadataLoading(candidate);
     loadSelectedMetadata(record, candidate);
     els.addActiveCandidateBtn.disabled = false;
     renderSynopsisIndicators();
@@ -887,6 +1014,8 @@ TR.app = (() => {
 
   async function loadSelectedMetadata(record, candidate) {
     const requestId = ++state.metadataRequestId;
+    const genizahRequestId = ++state.genizahRequestId;
+    renderGenizahMetadataLoading(candidate);
     const originalPromise = record.bookPassage ? getCandidateMetadata(record.bookPassage) : Promise.resolve(null);
     const candidatePromise = getCandidateMetadata(candidate);
     const [original, source] = await Promise.allSettled([originalPromise, candidatePromise]);
@@ -903,6 +1032,7 @@ TR.app = (() => {
       fallbackRef: candidate.displayRef,
       book: state.model.bookMap.get(candidate.bookSlug),
       passage: source.status === 'fulfilled' ? source.value : null,
+      candidate,
       error: source.status === 'rejected' ? source.reason?.message : null
     });
 
@@ -929,9 +1059,28 @@ TR.app = (() => {
         || candidatePassage.canonicalRef
         || candidate.displayRef;
     }
+
+    await loadGenizahMetadata(candidate, genizahRequestId);
+  }
+
+  async function loadGenizahMetadata(candidate, requestId) {
+    if (!candidate || candidate.sourceFamily !== 'geniza') {
+      if (requestId === state.genizahRequestId) renderGenizahMetadata(null, candidate);
+      return;
+    }
+
+    try {
+      const metadata = await genizah.getMetadataForCandidate(candidate);
+      if (requestId !== state.genizahRequestId) return;
+      renderGenizahMetadata(metadata, candidate);
+    } catch (error) {
+      if (requestId !== state.genizahRequestId) return;
+      renderGenizahMetadata({ isGeniza: true, reason: error.message }, candidate);
+    }
   }
 
   async function getCandidateMetadata(candidate) {
+    if (!candidate?.isBookPassage && candidate?.isSefariaLike === false) return null;
     const key = `${candidate.bookSlug}::${candidate.sourceLocation}`;
     if (state.passageMetadata.has(key)) return state.passageMetadata.get(key);
     const metadata = await sefaria.getPassageMetadata(candidate);
@@ -939,12 +1088,141 @@ TR.app = (() => {
     return metadata;
   }
 
-  function renderMetadataLoading() {
+  function renderMetadataLoading(candidate) {
     els.originalMetadata.innerHTML = metadataPlaceholder('מאתר את קטע הספר בספריא…', true);
+    if (candidate?.isSefariaLike === false) {
+      els.candidateMetadata.innerHTML = metadataPlaceholder('לקטע זה אין מקור בספריא. נטען מטה-דאטה מקומי…', true);
+      return;
+    }
     els.candidateMetadata.innerHTML = metadataPlaceholder('מאתר את הקטע מן הדאטהסט בספריא…', true);
   }
 
-  function renderMetadataCard(container, { heading, fallbackRef, book, passage, error }) {
+  function renderGenizahMetadataLoading(candidate) {
+    if (!candidate || candidate.sourceFamily !== 'geniza') {
+      renderGenizahMetadata(null, candidate);
+      return;
+    }
+    setGenizahDropdownHtml(`
+      <details class="genizah-dropdown" open>
+        <summary>מטה-דאטה מורחב של גניזה (מתחת ל-MD מתוך JSON)</summary>
+        <div class="genizah-dropdown-body">${metadataPlaceholder('טוען מטה-דאטה מקומי של Genizah…', true)}</div>
+      </details>
+    `);
+    state.activeGenizahMetadata = null;
+  }
+
+  function renderGenizahMetadata(metadata, candidate) {
+    if (!candidate || candidate.sourceFamily !== 'geniza') {
+      setGenizahDropdownHtml('');
+      state.activeGenizahMetadata = null;
+      return;
+    }
+
+    if (!metadata?.item) {
+      const reason = metadata?.reason || 'לא נמצא מטה-דאטה מקומי עבור קטע גניזה זה.';
+      setGenizahDropdownHtml(`
+        <details class="genizah-dropdown" open>
+          <summary>מטה-דאטה מורחב של גניזה (מתחת ל-MD מתוך JSON)</summary>
+          <div class="genizah-dropdown-body"><p class="metadata-warning">${TR.utils.escapeHtml(reason)}</p></div>
+        </details>
+      `);
+      state.activeGenizahMetadata = null;
+      return;
+    }
+
+    state.activeGenizahMetadata = metadata;
+    const rows = [
+      ['Lookup Mode', metadata.lookupMode || 'local'],
+      ['Geniza IE', metadata.ie || '—'],
+      ['ALMA', metadata.item.alma || '—'],
+      ['Page', metadata.item.page || '—'],
+      ['Shelfmark', metadata.item.shelfmark || '—'],
+      ['Title', metadata.item.title || '—'],
+      ['Library', metadata.item.library || '—'],
+      ['City', metadata.item.city || '—'],
+      ['Coverage', metadata.item.coverage ?? '—'],
+      ['Has NLI', String(Boolean(metadata.item.has_nli))],
+      ['Has Friedberg', String(Boolean(metadata.item.has_friedberg))]
+    ];
+
+    if (metadata.manifestCanvasCount != null) {
+      rows.push(['Manifest Canvases', String(metadata.manifestCanvasCount)]);
+    }
+
+    if (metadata.friedberg) {
+      rows.push(
+        ['Friedberg Domain', metadata.friedberg.d || '—'],
+        ['Friedberg Hebrew', metadata.friedberg.h || '—'],
+        ['Friedberg Library', metadata.friedberg.lib_name || metadata.friedberg.lib || '—'],
+        ['Friedberg Shelfmark', metadata.friedberg.shelfmark || '—'],
+        ['Friedberg Hierarchy', Array.isArray(metadata.friedberg.hier) ? metadata.friedberg.hier.join(' > ') : '—']
+      );
+    }
+
+    const localDetails = rows.map(([label, value]) => `
+      <div>
+        <dt>${TR.utils.escapeHtml(label)}</dt>
+        <dd>${TR.utils.escapeHtml(String(value ?? '—'))}</dd>
+      </div>
+    `).join('');
+
+    const imageAction = metadata.item.has_nli
+      ? '<button type="button" class="secondary-button" data-open-genizah-image>הצג תמונה בתוך המערכת</button>'
+      : '<span class="metadata-warning">אין תמונת NLI זמינה לפריט זה.</span>';
+
+    setGenizahDropdownHtml(`
+      <details class="genizah-dropdown" open>
+        <summary>מטה-דאטה מורחב של גניזה (מתחת ל-MD מתוך JSON)</summary>
+        <div class="genizah-dropdown-body">
+          <dl class="metadata-list genizah-local-list">${localDetails}</dl>
+          <div class="genizah-actions-row">
+            ${imageAction}
+            ${metadata.viewerUrl ? `<a class="text-button" href="${TR.utils.escapeHtml(metadata.viewerUrl)}" target="_blank" rel="noopener">צפייה בפריט ב-NLI ↗</a>` : ''}
+            ${metadata.manifestUrl ? `<a class="text-button" href="${TR.utils.escapeHtml(metadata.manifestUrl)}" target="_blank" rel="noopener">Manifest IIIF ↗</a>` : ''}
+          </div>
+          ${metadata.lookupMode === 'remote-manifest' ? '<p class="metadata-warning">הרשומה לא נמצאה בקובץ המקומי, ולכן ה-MD והתמונה נטענים ישירות מהספריה הלאומית לפי BIB/ALMA. בחירת התמונה נעשית מה-canvas הקרוב ביותר ל-IE.</p>' : ''}
+        </div>
+      </details>
+    `);
+  }
+
+  function setGenizahDropdownHtml(html) {
+    els.candidateMetadata.querySelector('.genizah-dropdown')?.remove();
+    if (!html) return;
+    els.candidateMetadata.insertAdjacentHTML('beforeend', html);
+  }
+
+  async function openGenizahImageDialog() {
+    const metadata = state.activeGenizahMetadata;
+    if (!metadata?.item) {
+      showToast('אין מטה-דאטה זמין לקטע גניזה זה.', 'error');
+      return;
+    }
+
+    const title = `${metadata.item.shelfmark || metadata.item.title || 'Genizah'} · IE ${metadata.ie || ''}`.trim();
+    els.genizahImageTitle.textContent = title;
+    els.genizahImageStatus.textContent = 'מאתר תמונה דרך manifest מרוחק…';
+    els.genizahImage.hidden = true;
+    els.openGenizahImageExternalLink.hidden = true;
+    openDialogSafely(els.genizahImageDialog);
+
+    try {
+      const imageUrl = await genizah.resolveImageUrl(metadata);
+      if (!els.genizahImageDialog.open) return;
+      els.genizahImage.src = imageUrl;
+      els.genizahImage.hidden = false;
+      els.openGenizahImageExternalLink.href = imageUrl;
+      els.openGenizahImageExternalLink.hidden = false;
+      els.genizahImageStatus.textContent = 'התמונה נטענה בהצלחה.';
+    } catch (error) {
+      if (!els.genizahImageDialog.open) return;
+      els.genizahImage.hidden = true;
+      els.openGenizahImageExternalLink.hidden = true;
+      els.genizahImageStatus.textContent = `לא ניתן לטעון תמונה: ${error.message}`;
+    }
+  }
+
+  function renderMetadataCard(container, { heading, fallbackRef, book, passage, candidate, error }) {
     const metadata = book?.metadata || {};
     const authors = (metadata.authors || []).map(author => author.he || author.en).filter(Boolean).join(', ');
     const canonicalRef = passage?.heRef || passage?.canonicalRef || fallbackRef;
@@ -954,6 +1232,7 @@ TR.app = (() => {
     const description = metadata.heShortDesc || metadata.enShortDesc || '';
     const link = passage?.url || metadata.url || null;
     const resolutionLabel = passage?.resolution ? diagnosticMethodLabel(passage.resolution) : '';
+    const noSefariaSource = Boolean(candidate && candidate.isSefariaLike === false);
 
     container.innerHTML = `
       <div class="metadata-heading-row">
@@ -972,6 +1251,7 @@ TR.app = (() => {
         ${resolutionLabel ? `<div><dt>פתרון ההפניה</dt><dd>${TR.utils.escapeHtml(resolutionLabel)}</dd></div>` : ''}
       </dl>
       ${description ? `<p class="metadata-description">${TR.utils.escapeHtml(description)}</p>` : ''}
+        ${noSefariaSource ? '<p class="metadata-warning">לקטע זה אין מקור בספריא (זהו קטע גניזה/VRR), ולכן מוצג רק מטה-דאטה מקומי של הדאטהסט.</p>' : ''}
       ${passage?.resolutionProblem ? `<p class="metadata-warning">${TR.utils.escapeHtml(passage.resolutionProblem)}</p>` : ''}
       ${error ? '<p class="metadata-warning">ספריא לא החזירה מטא־דאטה לקטע זה. הנתונים המקומיים עדיין מוצגים במלואם.</p>' : ''}`;
   }
@@ -1040,7 +1320,9 @@ TR.app = (() => {
     const options = { minNorm: state.network.minNorm, filters: state.filters };
     const graph = state.network.mode === 'source'
       ? state.model.buildSourceBookGraph(options)
-      : state.model.buildCooccurrenceGraph(options);
+      : state.network.mode === 'sourceGeniza'
+        ? state.model.buildSourceToGenizaGraph(options)
+        : state.model.buildCooccurrenceGraph(options);
     TR.visualizations.renderNetwork(els.networkSvg, graph, {
       onNodeClick: node => {
         state.network.selected = { type: 'node', node };
@@ -1057,9 +1339,14 @@ TR.app = (() => {
   function renderNetworkInspector() {
     const selected = state.network.selected;
     if (!selected) {
+      const modeText = state.network.mode === 'source'
+        ? 'כל ספר מקור מחובר לספרים שהוצעו כמועמדים לקטעיו. כאשר נטענו כמה מאגרים, כל ספרי המקור מוצגים יחד.'
+        : state.network.mode === 'sourceGeniza'
+          ? 'כל ספר מקור מחובר לכתבי־יד גניזה (NLI) שהופיעו כמועמדים לקטעיו. מצב זה זמין כאפשרות כאשר הדאטה כולל גניזה.'
+          : 'כל צומת הוא ספר. קו מחבר שני ספרים כאשר שניהם הופיעו כמועמדים לאותם קטעי מקור. עובי הקו מייצג את מספר הקטעים המשותפים.';
       els.networkInspector.innerHTML = `
         <h3>כיצד לקרוא את הרשת</h3>
-        <p>${state.network.mode === 'source' ? 'כל ספר מקור מחובר לספרים שהוצעו כמועמדים לקטעיו. כאשר נטענו כמה מאגרים, כל ספרי המקור מוצגים יחד.' : 'כל צומת הוא ספר. קו מחבר שני ספרים כאשר שניהם הופיעו כמועמדים לאותם קטעי מקור. עובי הקו מייצג את מספר הקטעים המשותפים.'}</p>
+        <p>${modeText}</p>
         <p>לחיצה על ספר או על קו תציג את הקטעים הרלוונטיים.</p>`;
       return;
     }
@@ -1112,6 +1399,9 @@ TR.app = (() => {
       els.reverseSummary.textContent = t('אין בחירה זמינה לתצוגה הפוכה.', 'No available selection for reverse view.');
       els.reverseTableBody.innerHTML = `<tr><td colspan="6" class="empty-table">${TR.utils.escapeHtml(t('אין נתונים להצגה.', 'No data to display.'))}</td></tr>`;
       els.reverseHeatmapContainer.replaceChildren();
+      state.reverse.sequenceRecordIds = [];
+      state.reverse.sequenceIndex = -1;
+      renderReverseSequenceBar();
       return;
     }
 
@@ -1119,14 +1409,20 @@ TR.app = (() => {
       mode: state.reverse.mode,
       groupKey: state.reverse.groupKey,
       limit: state.reverse.topCount,
+      orderBy: state.reverse.orderBy,
       filters: state.filters
     });
 
     const selectedLabel = els.reverseBookSelect.selectedOptions[0]?.textContent || state.reverse.groupKey;
+    const sequenceIds = reverseData.rows.map(item => item.record.id);
+    state.reverse.sequenceRecordIds = sequenceIds;
+    const activeIndex = sequenceIds.indexOf(state.activeRecordId);
+    state.reverse.sequenceIndex = activeIndex >= 0 ? activeIndex : (sequenceIds.length ? 0 : -1);
     els.reverseSummary.textContent = t(
       `מציג ${reverseData.rows.length} קטעי מקור הקרובים ביותר ל: ${selectedLabel}`,
       `Showing ${reverseData.rows.length} source passages that are closest to: ${selectedLabel}`
     );
+    renderReverseSequenceBar();
     els.reverseHeatTitle.textContent = t('התפלגות לאורך ספר המקור', 'Distribution across source book');
 
     els.reverseTableBody.innerHTML = reverseData.rows.length
@@ -1144,9 +1440,9 @@ TR.app = (() => {
 
     TR.utils.$$('[data-reverse-open-record]', els.reverseTableBody).forEach(button => {
       button.addEventListener('click', () => {
-        selectRecord(button.dataset.reverseOpenRecord, false);
-        setView('read');
-        renderAll();
+        const recordId = button.dataset.reverseOpenRecord;
+        const index = state.reverse.sequenceRecordIds.indexOf(recordId);
+        openReverseSequenceAt(index >= 0 ? index : 0);
       });
     });
 
@@ -1158,11 +1454,64 @@ TR.app = (() => {
     TR.visualizations.renderHeatmap(els.reverseHeatmapContainer, heatmap, {
       onCellClick: ({ row }) => {
         if (!row?.recordIds?.length) return;
-        selectRecord(row.recordIds[0], false);
-        setView('read');
-        renderAll();
+        const recordId = row.recordIds[0];
+        const index = state.reverse.sequenceRecordIds.indexOf(recordId);
+        openReverseSequenceAt(index >= 0 ? index : 0);
       }
     });
+  }
+
+  function renderReverseSequenceBar() {
+    const total = state.reverse.sequenceRecordIds.length;
+    els.reverseToggleSequenceLockBtn.textContent = state.reverse.sequenceLocked
+      ? t('נעילה: פעיל', 'Lock: On')
+      : t('נעילה: כבוי', 'Lock: Off');
+    if (!total) {
+      els.reverseSequenceInfo.textContent = t('אין רצף זמין לבחירה הנוכחית.', 'No sequence for current selection.');
+      els.reverseOpenSequenceBtn.disabled = true;
+      els.reversePrevSequenceBtn.disabled = true;
+      els.reverseNextSequenceBtn.disabled = true;
+      els.reverseToggleSequenceLockBtn.disabled = true;
+      return;
+    }
+
+    const index = state.reverse.sequenceIndex >= 0 ? state.reverse.sequenceIndex : 0;
+    const hasMultiple = total > 1;
+    els.reverseSequenceInfo.textContent = hasMultiple
+      ? t(`הפריט מופיע ${total} פעמים בחיבור · מופע ${index + 1} מתוך ${total}`, `Item appears ${total} times · occurrence ${index + 1} of ${total}`)
+      : t('נמצא מופע אחד בלבד לבחירה זו.', 'Only one occurrence for this selection.');
+    els.reverseOpenSequenceBtn.disabled = false;
+    els.reversePrevSequenceBtn.disabled = !hasMultiple;
+    els.reverseNextSequenceBtn.disabled = !hasMultiple;
+    els.reverseToggleSequenceLockBtn.disabled = false;
+  }
+
+  function openReverseSequenceAt(index) {
+    const ids = state.reverse.sequenceRecordIds;
+    if (!ids.length) {
+      showToast('אין רצף זמין לבחירה הנוכחית.', 'info');
+      return;
+    }
+    const safeIndex = ((index % ids.length) + ids.length) % ids.length;
+    const recordId = ids[safeIndex];
+    const record = state.model?.getRecord(recordId);
+    if (!record) return;
+
+    state.reverse.sequenceIndex = safeIndex;
+    state.activeRecordId = recordId;
+    state.activeCandidateId = pickBestReverseCandidate(record)?.id || chooseDefaultCandidate(record)?.id || null;
+    setView('read');
+    renderAll();
+  }
+
+  function pickBestReverseCandidate(record) {
+    if (!state.model || !record) return null;
+    const filtered = state.model.getCandidates(record.id, state.filters).filter(candidate => {
+      const descriptor = state.model.describeReverseGroup(candidate, state.reverse.mode);
+      return descriptor && descriptor.key === state.reverse.groupKey;
+    });
+    filtered.sort((a, b) => b.normScore - a.normScore || b.alignmentScore - a.alignmentScore || b.score - a.score);
+    return filtered[0] || null;
   }
 
   function renderScatter() {
@@ -2085,6 +2434,14 @@ TR.app = (() => {
 
   function stepRecord(direction) {
     if (!state.visibleRecords.length) return;
+
+    if (state.reverse.sequenceLocked && state.reverse.sequenceRecordIds.length) {
+      const sequenceIndex = state.reverse.sequenceRecordIds.indexOf(state.activeRecordId);
+      const baseIndex = sequenceIndex >= 0 ? sequenceIndex : (state.reverse.sequenceIndex >= 0 ? state.reverse.sequenceIndex : 0);
+      openReverseSequenceAt(baseIndex + direction);
+      return;
+    }
+
     const index = Math.max(0, state.visibleRecords.findIndex(record => record.id === state.activeRecordId));
     const next = state.visibleRecords[(index + direction + state.visibleRecords.length) % state.visibleRecords.length];
     selectRecord(next.id);
@@ -2139,6 +2496,7 @@ TR.app = (() => {
     els.diagnosticSampleInput.value = String(state.diagnostics.samplePerBook);
     els.diagnosticModeSelect.value = state.diagnostics.mode;
     els.reverseDatasetModeSelect.value = state.reverse.mode;
+    els.reverseOrderSelect.value = state.reverse.orderBy;
     els.reverseTopInput.value = String(state.reverse.topCount);
     if (state.model) {
       updateDatasetSummary();
@@ -2192,7 +2550,9 @@ TR.app = (() => {
         },
         reverse: {
           mode: state.reverse.mode,
-          topCount: state.reverse.topCount
+          topCount: state.reverse.topCount,
+          orderBy: state.reverse.orderBy,
+          sequenceLocked: state.reverse.sequenceLocked
         },
         activeView: state.activeView
       }));
@@ -2210,6 +2570,7 @@ TR.app = (() => {
       }
       if (saved.matrix) state.matrix = { ...state.matrix, ...saved.matrix };
       if (saved.network) state.network = { ...state.network, ...saved.network, selected: null };
+      if (!['cooccurrence', 'source', 'sourceGeniza'].includes(state.network.mode)) state.network.mode = 'cooccurrence';
       if (saved.synopsis) {
         state.synopsis = { ...state.synopsis, ...saved.synopsis, candidatesByRecord: new Map(), metadataRunId: 0 };
         state.synopsis.topCount = TR.utils.clamp(Number(state.synopsis.topCount) || 3, 1, 12);
@@ -2226,6 +2587,10 @@ TR.app = (() => {
         state.reverse = { ...state.reverse, ...saved.reverse };
         if (!['book', 'genizaAll', 'genizaFragment', 'vrrManuscript'].includes(state.reverse.mode)) state.reverse.mode = 'book';
         state.reverse.topCount = TR.utils.clamp(Number(state.reverse.topCount) || 30, 3, 120);
+        if (!['source', 'score'].includes(state.reverse.orderBy)) state.reverse.orderBy = 'source';
+        state.reverse.sequenceRecordIds = [];
+        state.reverse.sequenceIndex = -1;
+        state.reverse.sequenceLocked = Boolean(state.reverse.sequenceLocked);
       }
     } catch { /* Ignore malformed storage. */ }
   }
