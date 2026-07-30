@@ -5,7 +5,7 @@ TR.GenizahService = class GenizahService {
     const defaultTemplates = {
       nli_viewer_url: 'https://www.nli.org.il/en/manuscripts/NNL_ALEPH{ALMA}/NLI',
       nli_manifest_proxy_url: 'https://nli-proxy.avichai-levy.workers.dev/IIIFv21/DOCID/PNX_MANUSCRIPTS{ALMA}-1/manifest',
-      iiif_image_url_template: 'https://iiif.nli.org.il/IIIFv21/{FL_ID}/full/max/0/default.jpg'
+      iiif_image_url_template: 'https://nli-proxy.avichai-levy.workers.dev/IIIFv21/{FL_ID}/full/max/0/default.jpg'
     };
     this.config = {
       itemsPath: config.itemsPath || 'Genizah_Data/geniza_items_with_image_links.json',
@@ -222,22 +222,27 @@ TR.GenizahService = class GenizahService {
     return this.findClosestCanvas(canvases, ie) || canvases[0] || null;
   }
 
+  proxyNliUrl(url) {
+    if (!url) return url;
+    return url.replace(/^https?:\/\/iiif\.nli\.org\.il\//i, 'https://nli-proxy.avichai-levy.workers.dev/');
+  }
+
   imageUrlFromCanvas(canvas) {
     const annotation = canvas?.images?.[0] || canvas?.items?.[0];
     const resource = annotation?.resource || annotation?.body || annotation;
     const directId = String(resource?.['@id'] || resource?.id || '').trim();
-    if (directId && /\.(jpe?g|png|webp)(\?|$)/i.test(directId)) return directId;
+    if (directId && /\.(jpe?g|png|webp)(\?|$)/i.test(directId)) return this.proxyNliUrl(directId);
 
     const service = resource?.service;
     const serviceObject = Array.isArray(service) ? service[0] : service;
     const serviceId = String(serviceObject?.['@id'] || serviceObject?.id || '').trim();
     if (serviceId) {
-      const base = serviceId.replace(/\/+$/, '');
+      const base = this.proxyNliUrl(serviceId.replace(/\/+$/, ''));
       return `${base}/full/full/0/default.jpg`;
     }
 
     if (directId) {
-      const base = directId.replace(/\/+$/, '');
+      const base = this.proxyNliUrl(directId.replace(/\/+$/, ''));
       if (!/\.(jpe?g|png|webp)(\?|$)/i.test(base)) {
         return `${base}/full/full/0/default.jpg`;
       }
