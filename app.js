@@ -1209,7 +1209,24 @@ TR.app = (() => {
     try {
       const imageUrl = await genizah.resolveImageUrl(metadata);
       if (!els.genizahImageDialog.open) return;
-      els.genizahImage.src = imageUrl;
+      await new Promise((resolve, reject) => {
+        const onLoad = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error('קובץ התמונה לא נטען משרת IIIF.'));
+        };
+        const cleanup = () => {
+          els.genizahImage.removeEventListener('load', onLoad);
+          els.genizahImage.removeEventListener('error', onError);
+        };
+        els.genizahImage.addEventListener('load', onLoad, { once: true });
+        els.genizahImage.addEventListener('error', onError, { once: true });
+        els.genizahImage.src = imageUrl;
+      });
+      if (!els.genizahImageDialog.open) return;
       els.genizahImage.hidden = false;
       els.openGenizahImageExternalLink.href = imageUrl;
       els.openGenizahImageExternalLink.hidden = false;

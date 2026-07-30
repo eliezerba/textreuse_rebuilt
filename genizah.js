@@ -24,8 +24,8 @@ TR.GenizahService = class GenizahService {
     this.metadataCache = new Map();
     this.localDataAvailable = false;
     this.storageKeys = {
-      metadataCache: 'tr_genizah_metadata_cache_v1',
-      imageCache: 'tr_genizah_image_cache_v2'
+      metadataCache: 'tr_genizah_metadata_cache_v2',
+      imageCache: 'tr_genizah_image_cache_v3'
     };
     this.restorePersistentCaches();
   }
@@ -152,6 +152,16 @@ TR.GenizahService = class GenizahService {
     return '';
   }
 
+  extractFlFromCandidate(candidate) {
+    const location = String(candidate?.sourceLocation || '');
+    const fragment = String(candidate?.sourceFragment || '');
+    const fromLocation = location.match(/FL(\d{4,})/i)?.[1];
+    if (fromLocation) return `FL${fromLocation}`;
+    const fromFragment = fragment.match(/FL(\d{4,})/i)?.[1];
+    if (fromFragment) return `FL${fromFragment}`;
+    return '';
+  }
+
   async fetchManifestByAlma(alma) {
     const key = String(alma || '').trim();
     if (!key) return null;
@@ -189,6 +199,52 @@ TR.GenizahService = class GenizahService {
       }
     }
     return best;
+  }
+
+  extractCanvasFlId(canvas) {
+    const canvasId = String(canvas?.['@id'] || canvas?.id || '');
+    const match = canvasId.match(/(FL\d{4,})$/i) || canvasId.match(/(FL\d{4,})/i);
+    return match ? match[1].toUpperCase() : '';
+  }
+
+  findBestCanvas(canvases, { ie, flId } = {}) {
+    if (!Array.isArray(canvases) || !canvases.length) return null;
+    const normalizedFl = String(flId || '').trim().toUpperCase();
+    if (normalizedFl) {
+      const exact = canvases.find(canvas => this.extractCanvasFlId(canvas) === normalizedFl);
+      if (exact) return exact;
+      const flDigits = normalizedFl.match(/FL(\d{4,})/)?.[1] || '';
+      if (flDigits) {
+        const byDigits = canvases.find(canvas => this.extractCanvasFlId(canvas).endsWith(flDigits));
+        if (byDigits) return byDigits;
+      }
+    }
+    return this.findClosestCanvas(canvases, ie) || canvases[0] || null;
+  }
+
+  imageUrlFromCanvas(canvas) {
+    const annotation = canvas?.images?.[0] || canvas?.items?.[0];
+    const resource = annotation?.resource || annotation?.body || annotation;
+    const directId = String(resource?.['@id'] || resource?.id || '').trim();
+    if (directId && /\.(jpe?g|png|webp)(\?|$)/i.test(directId)) return directId;
+
+    const service = resource?.service;
+    const serviceObject = Array.isArray(service) ? service[0] : service;
+    const serviceId = String(serviceObject?.['@id'] || serviceObject?.id || '').trim();
+    if (serviceId) {
+      const base = serviceId.replace(/\/+$/, '');
+      return `${base}/full/full/0/default.jpg`;
+    }
+
+    if (directId) {
+      const base = directId.replace(/\/+$/, '');
+      if (!/\.(jpe?g|png|webp)(\?|$)/i.test(base)) {
+        return `${base}/full/full/0/default.jpg`;
+      }
+      return base;
+    }
+
+    return '';
   }
 
   metadataValue(manifest, label) {
@@ -245,14 +301,16 @@ TR.GenizahService = class GenizahService {
       return result;
     }
 
+    const flId = this.extractFlFromCandidate(candidate);
     const manifestData = await this.fetchManifestByAlma(alma);
     const manifest = manifestData?.manifest;
     const canvases = manifest?.sequences?.[0]?.canvases || [];
-    const nearestCanvas = this.findClosestCanvas(canvases, ie);
+    const nearestCanvas = this.findBestCanvas(canvases, { ie, flId });
     const nearestCanvasId = String(nearestCanvas?.['@id'] || '');
     const nearestFlId = nearestCanvasId.split('/').filter(Boolean).pop() || '';
-    const imageTemplate = this.templates.iiif_image_url_template;
-    const previewImageUrl = nearestFlId ? this.applyTemplate(imageTemplate, { FL_ID: nearestFlId }) : '';
+    const previewImageUrl = this.imageUrlFromCanvas(nearestCanvas) || (nearestFlId
+      ? this.applyTemplate(this.templates.iiif_image_url_template, { FL_ID: nearestFlId })
+      : '');
     const friedberg = this.friedbergByAlma[alma] || null;
 
     const remoteItem = {
@@ -274,6 +332,7 @@ TR.GenizahService = class GenizahService {
       lookupMode: 'remote-manifest',
       localDataAvailable: this.localDataAvailable,
       item: remoteItem,
+      flId,
       friedberg,
       viewerUrl: this.applyTemplate(this.templates.nli_viewer_url, { ALMA: alma }),
       manifestUrl: manifestData?.manifestUrl || '',
@@ -299,12 +358,12 @@ TR.GenizahService = class GenizahService {
       const alma = String(item.alma || '').trim();
       const manifestData = await this.fetchManifestByAlma(alma);
       const canvases = manifestData?.manifest?.sequences?.[0]?.canvases || [];
-      const canvas = this.findClosestCanvas(canvases, metadata.ie) || canvases[0];
+      const canvas = this.findBestCanvas(canvases, { ie: metadata.ie, flId: metadata.flId || item.flId }) || canvases[0];
       const canvasId = canvas?.['@id'];
       if (!canvasId) throw new Error('No canvas id found in remote IIIF manifest.');
       const flId = String(canvasId).split('/').filter(Boolean).pop();
       if (!flId) throw new Error('Could not extract FL_ID from remote canvas id.');
-      const imageUrl = this.applyTemplate(this.templates.iiif_image_url_template, { FL_ID: flId });
+      const imageUrl = this.imageUrlFromCanvas(canvas) || this.applyTemplate(this.templates.iiif_image_url_template, { FL_ID: flId });
       if (!imageUrl) throw new Error('Image URL template is missing.');
       this.imageUrlCache.set(cacheKey, imageUrl);
       this.persistCaches();
