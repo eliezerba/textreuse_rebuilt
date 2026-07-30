@@ -25,7 +25,7 @@ TR.GenizahService = class GenizahService {
     this.localDataAvailable = false;
     this.storageKeys = {
       metadataCache: 'tr_genizah_metadata_cache_v1',
-      imageCache: 'tr_genizah_image_cache_v1'
+      imageCache: 'tr_genizah_image_cache_v2'
     };
     this.restorePersistentCaches();
   }
@@ -313,16 +313,9 @@ TR.GenizahService = class GenizahService {
 
     const alma = String(item.alma || '').trim();
     const pageIndex = Math.max(0, (parseInt(item.page, 10) || 1) - 1);
-    const manifestUrl = item?.image_links?.nli_manifest_proxy_url
-      || this.applyTemplate(this.templates.nli_manifest_proxy_url, { ALMA: alma });
-    if (!manifestUrl) throw new Error('Manifest URL template is missing.');
-
-    const response = await fetch(manifestUrl, { cache: 'no-store' });
-    if (!response.ok) {
-      throw new Error(`Manifest request failed (HTTP ${response.status}).`);
-    }
-
-    const manifest = await response.json();
+    const manifestUrls = this.buildManifestUrlCandidates(alma, item);
+    const manifestData = await this.fetchManifestWithFallback(manifestUrls);
+    const manifest = manifestData.manifest;
     const canvases = manifest?.sequences?.[0]?.canvases || [];
     const canvas = canvases[pageIndex] || canvases[0];
     const canvasId = canvas?.['@id'];
@@ -331,13 +324,55 @@ TR.GenizahService = class GenizahService {
     const flId = String(canvasId).split('/').filter(Boolean).pop();
     if (!flId) throw new Error('Could not extract FL_ID from canvas id.');
 
-    const template = item?.image_links?.iiif_image_url_template || this.templates.iiif_image_url_template;
-    const imageUrl = this.applyTemplate(template, { FL_ID: flId });
+    const imageTemplates = this.buildImageTemplateCandidates(item);
+    const imageUrl = this.applyTemplate(imageTemplates[0], { FL_ID: flId });
     if (!imageUrl) throw new Error('Image URL template is missing.');
 
     this.imageUrlCache.set(cacheKey, imageUrl);
     this.persistCaches();
     return imageUrl;
+  }
+
+  buildManifestUrlCandidates(alma, item) {
+    const urls = [
+      this.applyTemplate(this.templates.nli_manifest_proxy_url, { ALMA: alma }),
+      item?.image_links?.nli_manifest_proxy_url || ''
+    ];
+    return Array.from(new Set(urls.map(url => String(url || '').trim()).filter(Boolean)));
+  }
+
+  async fetchManifestWithFallback(urls) {
+    if (!Array.isArray(urls) || !urls.length) {
+      throw new Error('Manifest URL template is missing.');
+    }
+
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        const response = await fetch(url, { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const manifest = await response.json();
+        if (!manifest || typeof manifest !== 'object') {
+          throw new Error('Invalid JSON payload');
+        }
+        return { manifest, manifestUrl: url };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    const details = lastError?.message ? ` (${lastError.message})` : '';
+    throw new Error(`Manifest request failed for all known URLs${details}.`);
+  }
+
+  buildImageTemplateCandidates(item) {
+    const templates = [
+      this.templates.iiif_image_url_template,
+      item?.image_links?.iiif_image_url_template || ''
+    ];
+    return Array.from(new Set(templates.map(template => String(template || '').trim()).filter(Boolean)));
   }
 
   async warmupForCandidates(candidates, onProgress = () => {}) {
