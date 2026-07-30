@@ -1192,6 +1192,14 @@ TR.app = (() => {
     els.candidateMetadata.insertAdjacentHTML('beforeend', html);
   }
 
+  function genizahImageSourceLabel(url) {
+    const value = String(url || '');
+    if (/api\.nli\.org\.il\/openlibrary\/api\/iiif/i.test(value)) return 'NLI OpenLibrary';
+    if (/nli-proxy\.avichai-levy\.workers\.dev/i.test(value)) return 'NLI Proxy';
+    if (/iiif\.nli\.org\.il/i.test(value)) return 'NLI IIIF';
+    return 'מקור חלופי';
+  }
+
   async function openGenizahImageDialog() {
     const metadata = state.activeGenizahMetadata;
     if (!metadata?.item) {
@@ -1213,6 +1221,7 @@ TR.app = (() => {
       }
       if (!els.genizahImageDialog.open) return;
       let loadedImageUrl = '';
+      let loadedImageIndex = -1;
       for (let index = 0; index < imageUrls.length; index += 1) {
         const candidateUrl = imageUrls[index];
         els.genizahImageStatus.textContent = `מנסה לטעון תמונה (${index + 1}/${imageUrls.length})…`;
@@ -1235,6 +1244,7 @@ TR.app = (() => {
             els.genizahImage.src = candidateUrl;
           });
           loadedImageUrl = candidateUrl;
+          loadedImageIndex = index;
           break;
         } catch {
           // Try the next known image source.
@@ -1248,7 +1258,11 @@ TR.app = (() => {
       els.genizahImage.hidden = false;
       els.openGenizahImageExternalLink.href = loadedImageUrl;
       els.openGenizahImageExternalLink.hidden = false;
-      els.genizahImageStatus.textContent = 'התמונה נטענה בהצלחה.';
+      const sourceLabel = genizahImageSourceLabel(loadedImageUrl);
+      const attemptsSummary = imageUrls.length > 1
+        ? ` (מקור ${loadedImageIndex + 1}/${imageUrls.length}: ${sourceLabel})`
+        : ` (${sourceLabel})`;
+      els.genizahImageStatus.textContent = `התמונה נטענה בהצלחה${attemptsSummary}.`;
     } catch (error) {
       if (!els.genizahImageDialog.open) return;
       els.genizahImage.hidden = true;
