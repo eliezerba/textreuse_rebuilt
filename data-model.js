@@ -258,15 +258,11 @@ TR.DataModel = class DataModel {
   }
 
   static sourceIdentity(record) {
-    const slug = String(record?.sourceBook?.slug || 'Unknown');
-    const template = record?.refTemplate || {};
-    const named = Array.isArray(template.namedPathTitles)
-      ? template.namedPathTitles.join('>')
-      : String(template.namedTitle || '');
-    const address = (template.addressTokens || []).join(':')
-      || String(template.address || '')
-      || String(record?.rawId || record?.location || '');
-    return `${slug}::${named}::${address}`;
+    // Normalize the raw JSON key so records from different datasets for the
+    // same source passage always receive the same identity, regardless of how
+    // bookCategories were inferred during parsing.
+    const raw = String(record?.rawId || record?.location || '');
+    return raw.normalize('NFKD').toLowerCase().replace(/[\s_.,:;\-\u2013\u2014/\\]+/g, '');
   }
 
   static compareSourceRecords(a, b) {
@@ -314,7 +310,7 @@ TR.DataModel = class DataModel {
       const datasetLabels = [...new Set(group.map(record => record.datasetLabel).filter(Boolean))];
       const mergedId = group.length === 1
         ? base.id
-        : `source::${base.sourceBook.slug}::${base.refTemplate?.address || groupIndex}`;
+        : `source::${base.sourceBook.slug}::${groupIndex}`;
       const candidates = group.flatMap(record => record.candidates
         .filter(candidate => !candidate.isSelf)
         .map(candidate => ({ ...candidate, recordId: mergedId })));
@@ -323,6 +319,7 @@ TR.DataModel = class DataModel {
       const bookPassage = base.bookPassage
         ? { ...base.bookPassage, id: `${mergedId}::book-passage`, recordId: mergedId }
         : null;
+      const sourceRecordIds = [...new Set(group.map(record => record.id))];
       return {
         ...base,
         id: mergedId,
@@ -331,6 +328,7 @@ TR.DataModel = class DataModel {
         datasetLabel: datasetLabels.length === 1 ? datasetLabels[0] : `${datasetLabels.length} מאגרים`,
         datasetIds: [...new Set(group.map(record => record.datasetId))],
         datasetLabels,
+        sourceRecordIds,
         bookPassage,
         candidates,
         removedSelfCount: group.reduce((sum, record) => sum + Number(record.removedSelfCount || 0), 0),

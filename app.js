@@ -102,7 +102,7 @@ TR.app = (() => {
       'addActiveCandidateBtn', 'openSynopsisBtn', 'synopsisQuickCount', 'selectedCandidateCount',
       'selectTopCandidatesBtn', 'clearSelectedCandidatesBtn',
       'synopsisTabCount', 'syncSynopsisScrollInput',
-      'synopsisColumnWidthInput', 'exportSynopsisBtn', 'synopsisBuilderTitle', 'synopsisSelectionCount',
+      'synopsisColumnWidthInput', 'exportSynopsisBtn', 'exportSynopsisCsvBtn', 'synopsisBuilderTitle', 'synopsisSelectionCount',
       'synopsisTopCountInput', 'selectSynopsisTopBtn', 'selectSynopsisVisibleBtn', 'clearSynopsisBtn',
       'synopsisPicker', 'synopsisStageTitle', 'synopsisStageNote', 'synopsisMetadataProgress', 'synopsisGrid',
       'synopsisPrevRecordBtn', 'synopsisNextRecordBtn', 'synopsisRecordSelect', 'synopsisRecordPosition',
@@ -247,6 +247,7 @@ TR.app = (() => {
     els.selectSynopsisVisibleBtn.addEventListener('click', selectSynopsisVisible);
     els.clearSynopsisBtn.addEventListener('click', clearSynopsisSelection);
     els.exportSynopsisBtn.addEventListener('click', exportSynopsisHtml);
+    els.exportSynopsisCsvBtn.addEventListener('click', exportSynopsisCsv);
     els.synopsisPicker.addEventListener('change', handleSynopsisPickerChange);
     els.synopsisGrid.addEventListener('click', handleSynopsisGridClick);
     els.continuousSynopsis.addEventListener('click', handleContinuousSynopsisClick);
@@ -559,7 +560,8 @@ TR.app = (() => {
       : await fetchSourceText(source.url);
     await TR.utils.nextFrame();
     let raw;
-    try { raw = JSON.parse(text); }
+    const normalizedText = String(text).replace(/^\uFEFF/, '');
+    try { raw = JSON.parse(normalizedText); }
     catch (error) { throw new Error(`JSON לא תקין (${error.message})`); }
     source.model = await TR.DataModel.fromRaw(raw, source.label, progress => {
       const ratio = progress.total ? progress.current / progress.total : 0;
@@ -1004,6 +1006,7 @@ TR.app = (() => {
           <small>${TR.utils.compactNumber(candidate.score, 0)}</small>
         </span>`;
       button.addEventListener('click', () => selectCandidate(candidate.id));
+      row.append(checkbox);
       row.append(button);
       fragment.append(row);
     });
@@ -2293,6 +2296,79 @@ TR.app = (() => {
     }
   }
 
+  function getCurrentSynopsisRows() {
+    const record = activeRecord();
+    if (!record) return [];
+
+    if (state.synopsis.mode === 'continuous') {
+      const records = continuousRecordsFromCurrent();
+      const rows = [];
+      records.forEach((currentRecord, index) => {
+        let candidates = [];
+        if (state.synopsis.strategy === 'manual') {
+          candidates = getSelectedSynopsisCandidates(currentRecord);
+          if (!candidates.length) candidates = smartCandidatesForRecord(currentRecord, 'recommended', state.synopsis.topCount);
+        } else {
+          candidates = smartCandidatesForRecord(currentRecord, state.synopsis.strategy, state.synopsis.topCount);
+        }
+        candidates.forEach(candidate => {
+          rows.push({
+            synopsis_mode: 'continuous',
+            record_index: index + 1,
+            record_total: records.length,
+            source_book: sourceBookTitle(currentRecord),
+            source_ref: sourceCanonicalRef(currentRecord),
+            source_text: currentRecord.originalText || '',
+            candidate_book: candidate.bookTitle,
+            candidate_ref: candidate.displayRef,
+            candidate_text: candidate.passageText || candidate.sourceText || '',
+            dataset_label: candidate.datasetLabel,
+            dataset_location: candidate.sourceLocation,
+            source_location: currentRecord.rawId,
+            score: candidate.score,
+            norm_score: candidate.normScore,
+            alignment_score: candidate.alignmentScore,
+            full_alignment: candidate.fullAlignment ? 1 : 0
+          });
+        });
+      });
+      return rows;
+    }
+
+    const candidates = getSelectedSynopsisCandidates(record);
+    return candidates.map(candidate => ({
+      synopsis_mode: 'single',
+      record_index: 1,
+      record_total: 1,
+      source_book: sourceBookTitle(record),
+      source_ref: sourceCanonicalRef(record),
+      source_text: record.originalText || '',
+      candidate_book: candidate.bookTitle,
+      candidate_ref: candidate.displayRef,
+      candidate_text: candidate.passageText || candidate.sourceText || '',
+      dataset_label: candidate.datasetLabel,
+      dataset_location: candidate.sourceLocation,
+      source_location: record.rawId,
+      score: candidate.score,
+      norm_score: candidate.normScore,
+      alignment_score: candidate.alignmentScore,
+      full_alignment: candidate.fullAlignment ? 1 : 0
+    }));
+  }
+
+  function getSelectedSynopsisCandidates(record) {
+    const selectedIds = selectedCandidatesForRecord(record.id);
+    const visibleOrder = state.model.getCandidates(record.id, state.filters);
+    const visibleIds = new Set(visibleOrder.map(candidate => candidate.id));
+    const order = [
+      ...visibleOrder.filter(candidate => selectedIds.has(candidate.id)),
+      ...record.candidates.filter(candidate => selectedIds.has(candidate.id) && !visibleIds.has(candidate.id))
+    ];
+    if (order.length) return order;
+    if (state.synopsis.strategy === 'manual') return [];
+    return smartCandidatesForRecord(record, state.synopsis.strategy, state.synopsis.topCount);
+  }
+
   function exportSynopsisHtml() {
     const continuous = state.synopsis.mode === 'continuous';
     const sourceElement = continuous ? els.continuousSynopsis : els.synopsisGrid;
@@ -2312,6 +2388,19 @@ TR.app = (() => {
       body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#f3f5f7;color:#17212b}h1{font-family:Georgia,serif}.synopsis-grid,.continuous-columns{display:flex;gap:12px;overflow:auto;align-items:stretch;direction:rtl}.synopsis-column,.continuous-column{flex:0 0 380px;background:white;border:1px solid #dbe2e8;border-radius:12px;overflow:hidden}.synopsis-column-head,.continuous-column-head{padding:14px;border-bottom:1px solid #dbe2e8}.synopsis-column-head h3,.continuous-column-head h4{margin:4px 0}.synopsis-column-head p,.synopsis-column-head small,.continuous-column-head p{color:#637180}.synopsis-text-scroll,.continuous-column-text{padding:18px;max-height:70vh;overflow:auto;font-family:Georgia,'Times New Roman',serif;font-size:1.08rem;line-height:2}.continuous-passage{margin:0 0 20px;padding:12px;background:#fff;border:1px solid #dbe2e8;border-radius:12px}.continuous-passage-head{padding:8px 4px}.alignment-token,.union-match{border-radius:3px}.alignment-token.exact,.union-match{background:color-mix(in srgb,var(--match-color,#2f6b50) var(--match-opacity,32%),transparent);box-shadow:inset 0 -2px 0 var(--match-color,#2f6b50)}.alignment-token.related{background:color-mix(in srgb,var(--match-color,#6b5a91) 22%,transparent)}.alignment-token.fuzzy{background:color-mix(in srgb,var(--match-color,#9b7048) 18%,transparent)}.synopsis-column-metadata,.continuous-column-foot{padding:12px;border-top:1px solid #dbe2e8;font-size:.8rem}</style></head><body><h1>${TR.utils.escapeHtml(title)}</h1>${clone.outerHTML}</body></html>`;
     TR.utils.downloadText(`synopsis_${continuous ? 'continuous_' : ''}${Date.now()}.html`, html, 'text/html;charset=utf-8');
     showToast('קובץ הסינופסיס נוצר.', 'success');
+  }
+
+  function exportSynopsisCsv() {
+    if (!state.model) return;
+    const rows = getCurrentSynopsisRows();
+    if (!rows.length) {
+      showToast('יש לבחור טקסטים לפני הייצוא.', 'error');
+      return;
+    }
+    const columns = ['synopsis_mode', 'record_index', 'record_total', 'source_book', 'source_ref', 'source_text', 'candidate_book', 'candidate_ref', 'candidate_text', 'dataset_label', 'dataset_location', 'source_location', 'score', 'norm_score', 'alignment_score', 'full_alignment'];
+    const csv = `\uFEFF${TR.utils.rowsToCsv(rows, columns)}`;
+    TR.utils.downloadText(`synopsis_${state.synopsis.mode === 'continuous' ? 'continuous_' : ''}${Date.now()}.csv`, csv, 'text/csv;charset=utf-8');
+    showToast('קובץ הסינופסיס נוצר כ־CSV.', 'success');
   }
 
   function renderDiagnostics() {

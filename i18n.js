@@ -13,6 +13,7 @@ TR.i18n = (() => {
     { selector: '.brand-block > p:last-child', he: 'קריאה צמודה של קטעי המקור לצד מועמדי הקרבה, עם מטא־דאטה מספריא ומבט רוחב על יחסי הספרים.', en: 'Close reading of source passages next to candidate parallels, with Sefaria metadata and macro views of inter-book relationships.' },
     { selector: '#loadFileBtn', he: 'בחירת מאגרי JSON', en: 'Choose JSON Datasets' },
     { selector: '#exportCsvBtn', he: 'ייצוא CSV', en: 'Export CSV' },
+    { selector: '#exportSynopsisCsvBtn', he: 'ייצוא CSV', en: 'Export CSV' },
     { selector: '[data-view="read"]', he: 'קריאה והשוואה', en: 'Read & Compare' },
     { selector: '[data-view="synopsis"]', he: 'סינופסיס', en: 'Synopsis' },
     { selector: '[data-view="reverse"]', he: 'קריאה הפוכה', en: 'Reverse Reading' },

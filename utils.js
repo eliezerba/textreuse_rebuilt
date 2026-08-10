@@ -494,6 +494,12 @@ TR.utils = (() => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function rowsToCsv(rows, columns) {
+    const header = columns.map(column => csvEscape(column)).join(',');
+    const body = rows.map(row => columns.map(column => csvEscape(row?.[column])).join(',')).join('\r\n');
+    return [header, body].filter(Boolean).join('\r\n');
+  }
+
   function csvEscape(value) {
     const text = String(value ?? '');
     return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -526,6 +532,6 @@ TR.utils = (() => {
     $, $$, clamp, finite, normalizeText, escapeHtml, humanize, compactNumber,
     percent, debounce, nextFrame, hashColor, scoreTone, locationParts, chapterKey,
     chooseAlignedHtml, parseAlignmentPairs, alignmentIndexMap, alignedTextHtml, sanitizeAlignmentHtml, stripHtml, tokenCount, downloadText,
-    csvEscape, fetchJson, setBusy
+    rowsToCsv, csvEscape, fetchJson, setBusy
   };
 })();
