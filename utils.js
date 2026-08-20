@@ -244,7 +244,11 @@ TR.utils = (() => {
 
   function htmlColor(rawStyle) {
     const style = String(rawStyle || '');
-    return safeCssColor(style.match(/(?:^|;)\s*color\s*:\s*([^;]+)/i)?.[1]?.trim() || '');
+    return safeCssColor(
+      style.match(/(?:^|;)\s*color\s*:\s*([^;]+)/i)?.[1]?.trim()
+      || style.match(/(?:^|;)\s*fill\s*:\s*([^;]+)/i)?.[1]?.trim()
+      || ''
+    );
   }
 
   function htmlBackgroundColor(rawStyle) {
@@ -253,6 +257,13 @@ TR.utils = (() => {
       || style.match(/(?:^|;)\s*background\s*:\s*([^;]+)/i)?.[1]?.trim()
       || '';
     return safeCssColor(direct);
+  }
+
+  function visualStyle(node) {
+    const style = String(node.getAttribute('style') || '');
+    const color = String(node.getAttribute('color') || node.getAttribute('fill') || '');
+    const background = String(node.getAttribute('bgcolor') || '');
+    return `${style}${color ? `;color:${color}` : ''}${background ? `;background-color:${background}` : ''}`;
   }
 
   function htmlTone(rawStyle) {
@@ -288,7 +299,7 @@ TR.utils = (() => {
         return;
       }
       if (node.nodeType !== Node.ELEMENT_NODE) return;
-      const ownStyle = `${node.getAttribute('style') || ''}${node.getAttribute('color') ? `;color:${node.getAttribute('color')}` : ''}`;
+      const ownStyle = visualStyle(node);
       const ownTone = htmlTone(ownStyle);
       const ownColor = htmlColor(ownStyle);
       const ownBackground = htmlBackgroundColor(ownStyle);
@@ -565,7 +576,7 @@ TR.utils = (() => {
       const tag = node.tagName.toUpperCase();
       if (tag === 'BR') { parent.append(document.createElement('br')); return; }
       const wrapper = document.createElement(allowedBlocks.has(tag) ? tag.toLowerCase() : 'span');
-      const rawStyle = `${node.getAttribute('style') || ''}${node.getAttribute('color') ? `;color:${node.getAttribute('color')}` : ''}`;
+      const rawStyle = visualStyle(node);
       const textColor = htmlColor(rawStyle);
       const backgroundColor = htmlBackgroundColor(rawStyle);
       if (textColor) wrapper.style.color = textColor;
@@ -611,7 +622,7 @@ TR.utils = (() => {
 
       const wrapper = document.createElement(allowedBlocks.has(tag) ? tag.toLowerCase() : 'span');
       if (tag === 'SPAN' || node.hasAttribute('style') || node.hasAttribute('color')) {
-        const rawStyle = `${node.getAttribute('style') || ''}${node.getAttribute('color') ? `;color:${node.getAttribute('color')}` : ''}`.toLowerCase();
+        const rawStyle = visualStyle(node).toLowerCase();
         const tone = htmlTone(rawStyle);
         const originalColor = htmlColor(rawStyle);
         const originalBackground = htmlBackgroundColor(rawStyle);
