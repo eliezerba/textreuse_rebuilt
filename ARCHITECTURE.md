@@ -54,3 +54,43 @@ The right rail is a navigation structure for the queried source book only. Recor
 ## Synopsis invariant
 
 A synopsis always has exactly one source-book passage in the fixed rightmost column. Every other column is a user-selected candidate belonging to that source passage and originating from the loaded dataset(s). Source passages are never compared with other source passages.
+
+## Knowledge and resolver layer (2026 extension)
+
+The application now separates four concerns while retaining the original UI and view contracts:
+
+```text
+Input sources
+  ├─ TEXTREUSE JSON ───────────────┐
+  └─ Corpus JSON / JSONL / NDJSON ─┤
+                                   v
+                         Adapter + Passage Registry
+                                   |
+                  ┌────────────────┼────────────────┐
+                  v                v                v
+               Local            Sefaria            DTS
+               corpus          (legacy/enrich)    (optional)
+                  └────────────────┼────────────────┘
+                                   v
+                              ResolverHub
+                                   |
+                    TEXTREUSE relations/alignment
+                                   |
+                    Existing views and visualizations
+```
+
+### Modules
+
+- `data-adapters.js`: format detection and parsing. It never assumes every JSON file is a TEXTREUSE result.
+- `knowledge.js`: Passage metadata normalization, stable Resource/Passage IDs, word selectors, provenance, conflict retention, and `CorpusRegistry`.
+- `resolvers.js`: local registry and optional DTS resolvers behind `ResolverHub`; existing Sefaria service remains available.
+- `data-model.js`: keeps the old relation/candidate model, enriches it with passage identities and normalized alignment, and joins the Registry after multi-dataset combination.
+
+### Invariants
+
+1. A TEXTREUSE dataset can be loaded exactly as before without any corpus file.
+2. Corpus files never become candidates; they enrich passages by identity.
+3. `location` remains a compatibility identifier even when `resourceId` / `passageId` exist.
+4. Sefaria, Genizah and VRR behaviors are retained; local and DTS sources are additive.
+5. All existing tabs operate on the same `DataModel` contracts. New metadata is optional and must not make a visualization mandatory-dependent on an external resolver.
+6. The original raw data are retained for research provenance and diagnostics.

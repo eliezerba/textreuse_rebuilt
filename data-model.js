@@ -4,8 +4,20 @@ TR.DataModel = class DataModel {
   constructor({ label, records, books, targetBooks = [], datasets = [] }) {
     this.label = label;
     this.records = records;
-    this.recordMap = new Map(records.map(record => [record.id, record]));
-    this.candidateMap = new Map(records.flatMap(record => record.candidates.map(candidate => [candidate.id, candidate])));
+    this.recordMap = new Map();
+    this.candidateMap = new Map();
+    const categorySet = new Set();
+    let candidateCount = 0;
+    let maxScore = 0;
+    for (const record of records) {
+      this.recordMap.set(record.id, record);
+      for (const candidate of record.candidates || []) {
+        this.candidateMap.set(candidate.id, candidate);
+        candidateCount += 1;
+        maxScore = Math.max(maxScore, Number(candidate.score || 0));
+        for (const category of candidate.categories || []) categorySet.add(category);
+      }
+    }
     this.books = books;
     this.bookMap = new Map(books.map(book => [book.slug, book]));
     this.targetBooks = targetBooks;
@@ -13,18 +25,23 @@ TR.DataModel = class DataModel {
     this.sourceBookSlugs = new Set(targetBooks.map(book => book.slug));
     this.datasets = datasets;
     this.datasetMap = new Map(datasets.map(dataset => [dataset.id, dataset]));
-    this.categories = [...new Set(
-      records.flatMap(record => record.candidates)
-.flatMap(candidate => candidate.categories || [])
-    )].sort((a, b) => String(a).localeCompare(String(b), 'he'));
-    this.candidateCount = records.reduce((sum, record) => sum + record.candidates.length, 0);
-    this.nonSelfCandidateCount = this.candidateCount;
-    this.maxScore = Math.max(0, ...records.flatMap(record => record.candidates.map(candidate => candidate.score)));
+    this.categories = [...categorySet].sort((a, b) => String(a).localeCompare(String(b), 'he'));
+    this.candidateCount = candidateCount;
+    this.nonSelfCandidateCount = candidateCount;
+    this.maxScore = maxScore;
     this.structuralIssues = this.buildStructuralIssues();
   }
 
   static async fromRaw(raw, label = 'dataset', onProgress = () => {}, options = {}) {
     const { finite, normalizeText, locationParts, chapterKey } = TR.utils;
+    const compactMode = Boolean(options.compact);
+    const largeSourceId = String(options.largeSourceId || options.datasetId || '');
+    const COMPACT_TEXT_PREVIEW = 420;
+    const storedText = value => {
+      const text = String(value || '');
+      if (!compactMode || text.length <= COMPACT_TEXT_PREVIEW) return text;
+      return `${text.slice(0, COMPACT_TEXT_PREVIEW)}…`;
+    };
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       throw new Error('מבנה הקובץ אינו אובייקט JSON של קטעים.');
     }
@@ -33,7 +50,7 @@ TR.DataModel = class DataModel {
     if (!entries.length) throw new Error('קובץ ה־JSON ריק.');
 
     const datasetId = String(options.datasetId || `dataset-${Math.random().toString(36).slice(2, 10)}`);
-    const dataset = { id: datasetId, label };
+    const dataset = { id: datasetId, label, kind: 'textreuse' };
     const records = [];
     const targetBooks = new Map();
     const normalizeLocationIdentity = value => String(value || '')
@@ -42,12 +59,14 @@ TR.DataModel = class DataModel {
       .replace(/[\s_.,:;\-–—/\\]+/g, '')
       .trim();
     const normalizeLoose = value => String(value || '').toLowerCase().replace(/[\s_\-]+/g, ' ').trim();
-    const detectCandidateFamily = (sourceLocation, categories) => {
+    const detectCandidateFamily = (sourceLocation, categories, sourceData = {}) => {
       const list = Array.isArray(categories) ? categories.map(item => String(item || '')) : [];
       const first = normalizeLoose(list[0]);
       const location = String(sourceLocation || '');
+      const explicitFamily = normalizeLoose(sourceData.source_family || sourceData.sourceFamily || sourceData.provider || sourceData.source_type || sourceData.sourceType || sourceData.resolver || '');
+      const explicitNonSefaria = sourceData.is_sefaria === false || sourceData.isSefaria === false;
 
-      if (first.includes('geniza') || /^geniza_/i.test(location)) {
+      if (explicitFamily.includes('geniza') || first.includes('geniza') || /^geniza_/i.test(location)) {
         const manuscript = list[1] || (location.match(/(BIB_[^_]+)/i)?.[1] || 'GENIZA_MS');
         const fragment = list[2] || (location.match(/(IE\d+)/i)?.[1] || 'UNKNOWN_FRAGMENT');
         return {
@@ -59,7 +78,7 @@ TR.DataModel = class DataModel {
         };
       }
 
-      if (first.includes('vrr milikowsky') || /^vrr_milikowsky_/i.test(location)) {
+      if (explicitFamily.includes('vrr') || first.includes('vrr milikowsky') || /^vrr_milikowsky_/i.test(location)) {
         const manuscript = list[1] || (location.match(/^VRR_Milikowsky_([^_]+)/i)?.[1] || 'UNKNOWN_MS');
         return {
           family: 'vrr',
@@ -70,6 +89,12 @@ TR.DataModel = class DataModel {
         };
       }
 
+      if (explicitFamily.includes('dts')) {
+        return { family: 'dts', manuscript: '', fragment: '', bookSlug: '', bookTitle: '' };
+      }
+      if (explicitNonSefaria || ['local', 'custom', 'corpus', 'external', 'other'].some(value => explicitFamily.includes(value))) {
+        return { family: 'local', manuscript: '', fragment: '', bookSlug: '', bookTitle: '' };
+      }
       return {
         family: 'sefariaLike',
         manuscript: '',
@@ -105,6 +130,7 @@ TR.DataModel = class DataModel {
         || rawCandidates.find(candidate => candidate?.alignment_details?.passage_text)?.alignment_details?.passage_text
         || ''
       );
+      const storedOriginalText = storedText(originalText);
       const sourceBook = {
         slug: originalParts.bookSlug,
         title: originalParts.bookTitle,
@@ -117,7 +143,17 @@ TR.DataModel = class DataModel {
         const sourceLocation = details.location || candidate.location || '';
         const categories = Array.isArray(details.source_categories) ? details.source_categories : [];
         const parts = TR.refTemplates?.parseLocation(sourceLocation, categories) || locationParts(sourceLocation, categories);
-        const family = detectCandidateFamily(sourceLocation, categories);
+        const familyInput = compactMode ? {
+          source_family: details.source_family ?? candidate.source_family,
+          sourceFamily: details.sourceFamily ?? candidate.sourceFamily,
+          provider: details.provider ?? candidate.provider,
+          source_type: details.source_type ?? candidate.source_type,
+          sourceType: details.sourceType ?? candidate.sourceType,
+          resolver: details.resolver ?? candidate.resolver,
+          is_sefaria: details.is_sefaria ?? candidate.is_sefaria,
+          isSefaria: details.isSefaria ?? candidate.isSefaria
+        } : { ...candidate, ...details };
+        const family = detectCandidateFamily(sourceLocation, categories, familyInput);
         const resolvedBookSlug = family.bookSlug || parts.bookSlug;
         const resolvedBookTitle = family.bookTitle || parts.bookTitle;
         const score = finite(details.score ?? candidate.score);
@@ -126,8 +162,71 @@ TR.DataModel = class DataModel {
         const fullAlignment = Boolean(finite(details.full_alignment_ind ?? candidate.full_alignment_ind));
         const passageText = String(details.passage_text || candidate.passage_text || originalText || '');
         const sourceText = String(details.source_text || candidate.source_text || '');
+        const storedPassageText = storedText(passageText);
+        const storedSourceText = storedText(sourceText);
         const rawCandidateId = String(candidate.elastic_id || candidateIndex);
         const id = `${datasetId}::${rawRecordId}::${rawCandidateId}`;
+        const metadataInput = compactMode ? {
+          location: sourceLocation,
+          title: details.title ?? candidate.title,
+          he_title: details.he_title ?? candidate.he_title,
+          categories,
+          source_categories: categories,
+          versions: details.versions ?? candidate.versions,
+          version: details.version ?? candidate.version,
+          versionSource: details.versionSource ?? candidate.versionSource,
+          version_source: details.version_source ?? candidate.version_source,
+          segment: details.segment ?? candidate.segment,
+          from_word: details.from_word ?? candidate.from_word,
+          to_word: details.to_word ?? candidate.to_word,
+          text_length: details.text_length ?? candidate.text_length,
+          references: details.references ?? candidate.references,
+          source_text: storedSourceText,
+          passage_text: storedPassageText,
+          dts_resource: details.dts_resource ?? candidate.dts_resource,
+          dts_ref: details.dts_ref ?? candidate.dts_ref
+        } : { ...candidate, ...details };
+        let localMetadata = TR.knowledge?.extractPassageMetadata
+          ? TR.knowledge.extractPassageMetadata(metadataInput, {
+              location: sourceLocation, label, sourceId: datasetId, refTemplate: parts, fallbackText: storedSourceText
+            })
+          : null;
+        if (compactMode && localMetadata) {
+          localMetadata = {
+            ...localMetadata,
+            analysisText: storedText(localMetadata.analysisText || sourceText),
+            originalText: storedText(localMetadata.originalText || sourceText),
+            raw: { __largeStoreRef: largeSourceId ? `${largeSourceId}::${rawRecordId}` : '', candidateIndex }
+          };
+        }
+        const resourceId = localMetadata?.resourceId || resolvedBookSlug;
+        const passageId = localMetadata?.passageId || parts.address || parts.display || sourceLocation;
+        const fullAlignmentModel = compactMode
+          ? {
+              origin: details.alignment_sequence ? 'alignment_sequence'
+                : (details.suspect_matrix || details.source_matrix) ? 'matrix'
+                  : (details.seq_source_html || details.seq_passage_html || details.passage_html || details.source_html) ? 'html-inferred' : 'none',
+              direct: Boolean(details.alignment_sequence),
+              pairs: [], sourceEvidence: [], candidateEvidence: [], synopsisTable: null
+            }
+          : (TR.utils.normalizedAlignment ? TR.utils.normalizedAlignment(details) : null);
+        const alignment = fullAlignmentModel;
+        // In large-file mode do not precompute token maps for every candidate.
+        // HTML/matrix inference can be expensive (including LCS work) and made
+        // streaming slower than ordinary loading. The active candidate is
+        // rehydrated from the raw store and aligned lazily on demand.
+        const storedDetails = compactMode ? {
+          location: sourceLocation,
+          source_categories: categories,
+          passage_text: compactMode ? '' : passageText,
+          source_text: compactMode ? '' : sourceText,
+          score,
+          norm_score: normScore,
+          alignment_score: alignmentScore,
+          full_alignment_ind: fullAlignment ? 1 : 0,
+          __normalizedAlignment: alignment,
+          __largeStoreRef: largeSourceId ? `${largeSourceId}::${rawRecordId}` : ''
+        } : details;
 
         const sameLocation = normalizeLocationIdentity(sourceLocation) === rawRecordIdentity;
         const sameParsedRef = resolvedBookSlug === originalParts.bookSlug
@@ -145,8 +244,8 @@ TR.DataModel = class DataModel {
           datasetId,
           datasetLabel: label,
           index: candidateIndex,
-          raw: candidate,
-          details,
+          raw: compactMode ? { __largeStoreRef: largeSourceId ? `${largeSourceId}::${rawRecordId}` : '', candidateIndex, elastic_id: candidate.elastic_id ?? null } : candidate,
+          details: storedDetails,
           sourceLocation,
           categories,
           topCategory: categories[0] || 'לא מזוהה',
@@ -160,20 +259,26 @@ TR.DataModel = class DataModel {
           sourceManuscript: family.manuscript,
           sourceFragment: family.fragment,
           isSefariaLike: family.family === 'sefariaLike',
+          resourceId,
+          passageId,
+          localMetadata,
+          provenance: localMetadata?.provenance || [{ sourceId: datasetId, label, kind: 'textreuse' }],
+          alignment,
           score,
           normScore,
           alignmentScore,
           fullAlignment,
           isSelf,
-          passageText,
-          bookText: passageText,
-          sourceText,
-          datasetText: sourceText,
+          passageText: storedPassageText,
+          bookText: storedPassageText,
+          sourceText: storedSourceText,
+          datasetText: storedSourceText,
+          largeSourceId: compactMode ? largeSourceId : '',
           originalHtml: null,
           candidateHtml: null,
-          hasDetailedAlignment: Boolean(details.seq_source_html || details.seq_passage_html || details.synopsis_table),
+          hasDetailedAlignment: Boolean(details.alignment_sequence || details.suspect_matrix || details.source_matrix || details.seq_source_html || details.seq_passage_html || details.synopsis_table),
           searchBlob: normalizeText([
-            label, sourceLocation, parts.display, categories.join(' '), sourceText, passageText,
+            label, sourceLocation, parts.display, categories.join(' '), storedSourceText, storedPassageText,
             score, normScore, alignmentScore
           ].join(' '))
         };
@@ -185,20 +290,39 @@ TR.DataModel = class DataModel {
 
       // A book-side passage object is retained solely for metadata resolution.
       // It is deliberately kept outside record.candidates.
-      const bookPassageDetails = {
+      const bookPassageDetails = compactMode ? {
+        location: rawRecordId,
+        source_categories: bookCategories,
+        passage_text: storedOriginalText,
+        source_text: storedOriginalText,
+        __largeStoreRef: largeSourceId ? `${largeSourceId}::${rawRecordId}` : ''
+      } : {
         ...bookSeedDetails,
         location: rawRecordId,
         source_categories: bookCategories,
         passage_text: originalText,
         source_text: originalText
       };
+      let bookLocalMetadata = TR.knowledge?.extractPassageMetadata
+        ? TR.knowledge.extractPassageMetadata(bookPassageDetails, {
+            location: rawRecordId, label, sourceId: datasetId, refTemplate: originalParts, fallbackText: storedOriginalText
+          })
+        : null;
+      if (compactMode && bookLocalMetadata) {
+        bookLocalMetadata = {
+          ...bookLocalMetadata,
+          analysisText: storedText(bookLocalMetadata.analysisText || originalText),
+          originalText: storedText(bookLocalMetadata.originalText || originalText),
+          raw: { __largeStoreRef: largeSourceId ? `${largeSourceId}::${rawRecordId}` : '' }
+        };
+      }
       const bookPassage = {
         id: `${recordId}::book-passage`,
         recordId,
         rawRecordId,
         datasetId,
         datasetLabel: label,
-        raw: bookSeed,
+        raw: compactMode ? { __largeStoreRef: largeSourceId ? `${largeSourceId}::${rawRecordId}` : '' } : bookSeed,
         details: bookPassageDetails,
         sourceLocation: rawRecordId,
         categories: bookCategories,
@@ -209,11 +333,26 @@ TR.DataModel = class DataModel {
         sefariaQuery: originalParts.searchQuery,
         displayRef: originalParts.display,
         refTemplate: originalParts,
-        passageText: originalText,
-        sourceText: originalText,
+        resourceId: bookLocalMetadata?.resourceId || originalParts.bookSlug,
+        passageId: bookLocalMetadata?.passageId || originalParts.address || originalParts.display || rawRecordId,
+        localMetadata: bookLocalMetadata,
+        provenance: bookLocalMetadata?.provenance || [{ sourceId: datasetId, label, kind: 'textreuse' }],
+        passageText: storedOriginalText,
+        sourceText: storedOriginalText,
+        largeSourceId: compactMode ? largeSourceId : '',
         isBookPassage: true,
         isSelf: false
       };
+
+      candidates.forEach(candidate => {
+        candidate.relation = {
+          type: 'text-reuse',
+          source: { resourceId: bookPassage.resourceId, passageId: bookPassage.passageId, location: rawRecordId },
+          target: { resourceId: candidate.resourceId, passageId: candidate.passageId, location: candidate.sourceLocation },
+          scores: { score: candidate.score, normScore: candidate.normScore, alignmentScore: candidate.alignmentScore, fullAlignment: candidate.fullAlignment },
+          alignment: candidate.alignment
+        };
+      });
 
       const best = candidates[0] || null;
       records.push({
@@ -223,13 +362,22 @@ TR.DataModel = class DataModel {
         datasetId,
         datasetLabel: label,
         jobId: rawRecord?.job_id ?? null,
-        raw: rawRecord,
+        compactMode,
+        largeSourceId: compactMode ? largeSourceId : '',
+        largeStoreRef: compactMode && largeSourceId ? `${largeSourceId}::${rawRecordId}` : '',
+        raw: compactMode ? { __largeStoreRef: largeSourceId ? `${largeSourceId}::${rawRecordId}` : '', job_id: rawRecord?.job_id ?? null } : rawRecord,
         location: rawRecord?.Location || rawRecordId,
         displayRef: originalParts.display,
         refTemplate: originalParts,
         chapter: chapterKey(rawRecordId),
-        originalText,
-        bookText: originalText,
+        resourceId: bookPassage.resourceId,
+        passageId: bookPassage.passageId,
+        localMetadata: bookLocalMetadata,
+        provenance: bookPassage.provenance,
+        originalText: storedOriginalText,
+        analysisText: bookLocalMetadata?.analysisText || storedOriginalText,
+        originalSourceText: bookLocalMetadata?.originalText || storedOriginalText,
+        bookText: storedOriginalText,
         sourceBook,
         bookPassage,
         candidates,
@@ -240,14 +388,14 @@ TR.DataModel = class DataModel {
         reuseBookCount: new Set(candidates.map(candidate => candidate.bookSlug)).size,
         exactCandidateCount: candidates.filter(candidate => candidate.fullAlignment).length,
         searchBlob: normalizeText([
-          label, rawRecordId, originalParts.display, originalText,
+          label, rawRecordId, originalParts.display, storedOriginalText,
           ...candidates.slice(0, 8).map(candidate => `${candidate.bookTitle} ${candidate.sourceText}`)
         ].join(' '))
       });
 
       if (recordIndex % 25 === 0 || recordIndex === entries.length - 1) {
         onProgress({ current: recordIndex + 1, total: entries.length });
-        await TR.utils.nextFrame();
+        if (!compactMode) await TR.utils.nextFrame();
       }
     }
 
@@ -255,6 +403,27 @@ TR.DataModel = class DataModel {
     records.sort(TR.DataModel.compareSourceRecords);
     const books = TR.DataModel.aggregateBooks(records);
     return new TR.DataModel({ label, records, books, targetBooks: targetBookList, datasets: [dataset] });
+  }
+
+  static fromBatchModels(models, label = 'large dataset', dataset = null) {
+    const selected = (models || []).filter(Boolean);
+    if (!selected.length) throw new Error('לא נוצרו רשומות מן הקובץ הגדול.');
+    const records = [];
+    const targetMap = new Map();
+    const datasetMap = new Map();
+    for (const model of selected) {
+      for (const record of model.records || []) records.push(record);
+      for (const book of model.targetBooks || []) targetMap.set(book.slug, book);
+      for (const item of model.datasets || []) datasetMap.set(item.id, item);
+    }
+    records.sort(TR.DataModel.compareSourceRecords);
+    return new TR.DataModel({
+      label,
+      records,
+      books: TR.DataModel.aggregateBooks(records),
+      targetBooks: [...targetMap.values()],
+      datasets: dataset ? [dataset] : [...datasetMap.values()]
+    });
   }
 
   static sourceIdentity(record) {
@@ -320,6 +489,9 @@ TR.DataModel = class DataModel {
         ? { ...base.bookPassage, id: `${mergedId}::book-passage`, recordId: mergedId }
         : null;
       const sourceRecordIds = [...new Set(group.map(record => record.id))];
+      const mergedLocalMetadata = group.reduce((current, record) =>
+        TR.knowledge?.mergePassageMetadata ? TR.knowledge.mergePassageMetadata(current, record.localMetadata) : (current || record.localMetadata), null);
+      const provenance = group.flatMap(record => record.provenance || []);
       return {
         ...base,
         id: mergedId,
@@ -329,7 +501,19 @@ TR.DataModel = class DataModel {
         datasetIds: [...new Set(group.map(record => record.datasetId))],
         datasetLabels,
         sourceRecordIds,
-        bookPassage,
+        sourceVariants: group.map(record => ({
+          id: record.id, datasetId: record.datasetId, datasetLabel: record.datasetLabel, raw: record.raw, localMetadata: record.localMetadata
+        })),
+        rawRecords: group.map(record => record.raw),
+        localMetadata: mergedLocalMetadata,
+        provenance,
+        analysisText: mergedLocalMetadata?.analysisText || base.analysisText || base.originalText,
+        originalSourceText: mergedLocalMetadata?.originalText || base.originalSourceText || base.originalText,
+        bookPassage: bookPassage ? {
+          ...bookPassage,
+          localMetadata: mergedLocalMetadata || bookPassage.localMetadata,
+          provenance
+        } : null,
         candidates,
         removedSelfCount: group.reduce((sum, record) => sum + Number(record.removedSelfCount || 0), 0),
         bestCandidate: best,
@@ -365,6 +549,83 @@ TR.DataModel = class DataModel {
       targetBooks: [...targetBookMap.values()],
       datasets
     });
+  }
+
+  attachRegistry(registry) {
+    this.registry = registry || null;
+    if (!registry) return this;
+    const resourceByCandidateBook = new Map();
+    const resourceBySourceBook = new Map();
+    for (const record of this.records) {
+      const recordEntry = registry.lookup(record) || registry.lookup(record.bookPassage);
+      if (recordEntry) {
+        record.localMetadata = TR.knowledge?.mergePassageMetadata
+          ? TR.knowledge.mergePassageMetadata(recordEntry, record.localMetadata)
+          : recordEntry;
+        record.resourceId = record.localMetadata?.resourceId || record.resourceId;
+        record.passageId = record.localMetadata?.passageId || record.passageId;
+        record.analysisText = record.localMetadata?.analysisText || record.analysisText || record.originalText;
+        record.originalSourceText = record.localMetadata?.originalText || record.originalSourceText || record.originalText;
+        if (record.sourceBook) {
+          record.sourceBook.resourceId = record.resourceId;
+          record.sourceBook.localTitle = record.localMetadata?.heTitle || record.localMetadata?.title || '';
+        }
+        if (record.bookPassage) {
+          record.bookPassage.localMetadata = record.localMetadata;
+          record.bookPassage.resourceId = record.resourceId;
+          record.bookPassage.passageId = record.passageId;
+          record.bookPassage.provenance = record.localMetadata?.provenance || record.bookPassage.provenance;
+        }
+      }
+      if (record.sourceBook?.slug && record.localMetadata?.resourceId && !resourceBySourceBook.has(record.sourceBook.slug)) {
+        resourceBySourceBook.set(record.sourceBook.slug, record.localMetadata.resourceId);
+      }
+      for (const candidate of record.candidates) {
+        const entry = registry.lookup(candidate);
+        if (!entry) continue;
+        candidate.localMetadata = TR.knowledge?.mergePassageMetadata
+          ? TR.knowledge.mergePassageMetadata(entry, candidate.localMetadata)
+          : entry;
+        candidate.resourceId = candidate.localMetadata?.resourceId || candidate.resourceId;
+        candidate.passageId = candidate.localMetadata?.passageId || candidate.passageId;
+        candidate.provenance = candidate.localMetadata?.provenance || candidate.provenance;
+        candidate.originalSourceText = candidate.localMetadata?.originalText || candidate.sourceText;
+        candidate.analysisText = candidate.localMetadata?.analysisText || candidate.sourceText;
+        candidate.localTitle = candidate.localMetadata?.heTitle || candidate.localMetadata?.title || '';
+        candidate.localCategories = candidate.localMetadata?.categories || [];
+        candidate.resolvedLocalRef = [candidate.localTitle || candidate.resourceId, candidate.passageId].filter(Boolean).join(' ');
+        if (candidate.bookSlug && candidate.localMetadata?.resourceId && !resourceByCandidateBook.has(candidate.bookSlug)) {
+          resourceByCandidateBook.set(candidate.bookSlug, candidate.localMetadata.resourceId);
+        }
+        if (candidate.relation) {
+          candidate.relation.source = { resourceId: record.resourceId, passageId: record.passageId, location: record.rawId };
+          candidate.relation.target = { resourceId: candidate.resourceId, passageId: candidate.passageId, location: candidate.sourceLocation };
+        }
+      }
+    }
+    for (const book of this.books) {
+      let resource = registry.resources.get(book.slug);
+      if (!resource) {
+        const resourceId = resourceByCandidateBook.get(book.slug) || resourceBySourceBook.get(book.slug);
+        if (resourceId) resource = registry.resources.get(resourceId);
+      }
+      if (resource) {
+        book.localResource = resource;
+        book.localTitle = resource.heTitle || resource.title || '';
+        book.localCategories = resource.categories || [];
+      }
+    }
+    this.records.sort((a, b) => {
+      const aResource = a.localMetadata?.resourceId || a.resourceId || a.sourceBook?.slug || '';
+      const bResource = b.localMetadata?.resourceId || b.resourceId || b.sourceBook?.slug || '';
+      const resourceCompare = String(aResource).localeCompare(String(bResource), 'en');
+      if (resourceCompare) return resourceCompare;
+      const aSegment = Number(a.localMetadata?.segment);
+      const bSegment = Number(b.localMetadata?.segment);
+      if (Number.isFinite(aSegment) && Number.isFinite(bSegment) && aSegment !== bSegment) return aSegment - bSegment;
+      return TR.DataModel.compareSourceRecords(a, b);
+    });
+    return this;
   }
 
   static aggregateBooks(records, metadataByBook = new Map()) {
@@ -524,7 +785,8 @@ TR.DataModel = class DataModel {
     const books = this.books
       .filter(book => book.nonSelfCandidateCount > 0)
       .filter(book => !requestedBooks.size || requestedBooks.has(book.slug))
-      .slice(0, maxBooks);
+      .slice(0, maxBooks)
+      .map(book => ({ ...book, title: book.localTitle || book.title, resourceId: book.localResource?.id || book.slug }));
     const bookSet = new Set(books.map(book => book.slug));
     const groups = new Map();
     const multipleDatasets = this.datasets.length > 1;
@@ -606,7 +868,8 @@ TR.DataModel = class DataModel {
 
     const nodes = nodeBooks.map(book => ({
       id: book.slug,
-      title: book.title,
+      resourceId: book.localResource?.id || book.slug,
+      title: book.localTitle || book.title,
       count: book.recordCount,
       strength: nodeStrength.get(book.slug) || 0,
       color: TR.utils.hashColor(book.slug),
@@ -631,7 +894,8 @@ TR.DataModel = class DataModel {
       if (!node) {
         node = {
           id: book.slug,
-          title: book.title,
+          resourceId: book.localResource?.id || book.resourceId || book.slug,
+          title: book.localTitle || book.title,
           count: 0,
           strength: 0,
           color: isSource ? '#17212b' : TR.utils.hashColor(book.slug),
@@ -646,7 +910,7 @@ TR.DataModel = class DataModel {
     };
 
     for (const record of this.records) {
-      const sourceNode = ensureNode(record.sourceBook, true);
+      const sourceNode = ensureNode({ ...record.sourceBook, title: record.sourceBook.localTitle || record.sourceBook.title, resourceId: record.resourceId }, true);
       sourceNode.count += 1;
       sourceNode.strength += 1;
       const bestByBook = new Map();
@@ -659,7 +923,8 @@ TR.DataModel = class DataModel {
       }
       for (const candidate of bestByBook.values()) {
         if (candidate.bookSlug === record.sourceBook.slug) continue;
-        const targetBook = this.bookMap.get(candidate.bookSlug) || { slug: candidate.bookSlug, title: candidate.bookTitle };
+        const targetBookBase = this.bookMap.get(candidate.bookSlug) || { slug: candidate.bookSlug, title: candidate.bookTitle };
+        const targetBook = { ...targetBookBase, title: targetBookBase.localTitle || candidate.localTitle || targetBookBase.title, resourceId: candidate.resourceId || targetBookBase.slug };
         const targetNode = ensureNode(targetBook, false);
         targetNode.count += 1;
         targetNode.strength += candidate.normScore;
@@ -771,9 +1036,11 @@ TR.DataModel = class DataModel {
 
   getScatterPoints({ filters = {}, maxPoints = TR.config.maxScatterPoints } = {}) {
     const points = [];
+    let seen = 0;
     for (const record of this.records) {
       for (const candidate of this.getCandidates(record.id, filters)) {
-        points.push({
+        seen += 1;
+        const point = {
           id: `${record.id}::${candidate.id}`,
           record,
           candidate,
@@ -781,12 +1048,17 @@ TR.DataModel = class DataModel {
           y: candidate.alignmentScore,
           size: Math.max(2, Math.sqrt(Math.max(1, candidate.score)) / 2.8),
           color: TR.utils.hashColor(candidate.bookSlug)
-        });
+        };
+        if (points.length < maxPoints) points.push(point);
+        else {
+          // Reservoir sampling avoids retaining every point before downsampling.
+          const slot = Math.floor(Math.random() * seen);
+          if (slot < maxPoints) points[slot] = point;
+        }
       }
     }
-    if (points.length <= maxPoints) return points;
-    const stride = points.length / maxPoints;
-    return Array.from({ length: maxPoints }, (_, index) => points[Math.floor(index * stride)]);
+    points.totalSeen = seen;
+    return points;
   }
 
   getReverseGroups({ mode = 'book', filters = {} } = {}) {
@@ -808,23 +1080,23 @@ TR.DataModel = class DataModel {
     if (!candidate) return null;
     if (mode === 'genizaAll') {
       if (candidate.sourceFamily === 'geniza') return { key: 'geniza::all', title: 'Geniza (all manuscripts)' };
-      return { key: candidate.bookSlug, title: candidate.bookTitle };
+      return { key: candidate.bookSlug, title: candidate.localTitle || candidate.bookTitle, resourceId: candidate.resourceId || candidate.bookSlug };
     }
     if (mode === 'genizaFragment') {
       if (candidate.sourceFamily === 'geniza') {
         const fragment = candidate.sourceFragment || 'UNKNOWN_FRAGMENT';
         return { key: `geniza-fragment::${fragment}`, title: `Geniza · ${fragment}` };
       }
-      return { key: candidate.bookSlug, title: candidate.bookTitle };
+      return { key: candidate.bookSlug, title: candidate.localTitle || candidate.bookTitle, resourceId: candidate.resourceId || candidate.bookSlug };
     }
     if (mode === 'vrrManuscript') {
       if (candidate.sourceFamily === 'vrr') {
         const manuscript = candidate.sourceManuscript || 'UNKNOWN_MS';
         return { key: `vrr-ms::${manuscript}`, title: `VRR Milikowsky · ${manuscript}` };
       }
-      return { key: candidate.bookSlug, title: candidate.bookTitle };
+      return { key: candidate.bookSlug, title: candidate.localTitle || candidate.bookTitle, resourceId: candidate.resourceId || candidate.bookSlug };
     }
-    return { key: candidate.bookSlug, title: candidate.bookTitle };
+    return { key: candidate.bookSlug, title: candidate.localTitle || candidate.bookTitle, resourceId: candidate.resourceId || candidate.bookSlug };
   }
 
   getReverseMatches({ mode = 'book', groupKey = '', limit = 30, orderBy = 'source', filters = {} } = {}) {
@@ -916,20 +1188,46 @@ TR.DataModel = class DataModel {
 
   toCsv(filters = {}) {
     const rows = [[
-      'dataset_file', 'book_location', 'book_ref', 'book_title', 'book_text',
-      'dataset_location', 'dataset_book', 'dataset_categories', 'dataset_text',
+      'dataset_file', 'source_resource_id', 'source_passage_id', 'book_location', 'book_ref', 'book_title', 'book_text', 'book_original_text',
+      'dataset_resource_id', 'dataset_passage_id', 'dataset_location', 'dataset_book', 'dataset_categories', 'dataset_text', 'dataset_original_text',
+      'version', 'version_source', 'from_word', 'to_word', 'alignment_origin', 'job_id', 'candidate_id',
       'score', 'norm_score', 'alignment_score', 'full_alignment'
     ]];
     for (const record of this.getVisibleRecords(filters)) {
       for (const candidate of this.getCandidates(record.id, filters)) {
+        const local = candidate.localMetadata || {};
+        const sourceLocal = record.localMetadata || {};
         rows.push([
-          record.datasetLabel, record.rawId, record.displayRef, record.sourceBook.title, record.originalText,
-          candidate.sourceLocation, candidate.bookTitle, candidate.categories.join(' > '), candidate.sourceText,
-          candidate.score, candidate.normScore, candidate.alignmentScore,
+          candidate.datasetLabel || record.datasetLabel,
+          sourceLocal.resourceId || record.resourceId || record.sourceBook.slug,
+          sourceLocal.passageId || record.passageId || record.rawId,
+          record.rawId,
+          record.displayRef,
+          sourceLocal.heTitle || sourceLocal.title || record.sourceBook.title,
+          sourceLocal.analysisText || record.analysisText || record.originalText,
+          sourceLocal.originalText || record.originalSourceText || record.originalText,
+          local.resourceId || candidate.resourceId || candidate.bookSlug,
+          local.passageId || candidate.passageId || candidate.sourceLocation,
+          candidate.sourceLocation,
+          local.heTitle || local.title || candidate.bookTitle,
+          (local.categories?.length ? local.categories : candidate.categories).join(' > '),
+          local.analysisText || candidate.analysisText || candidate.sourceText,
+          local.originalText || candidate.originalSourceText || candidate.sourceText,
+          Array.isArray(local.versions) ? local.versions.join(' | ') : (local.versions || ''),
+          local.versionSource || '',
+          local.fromWord ?? '',
+          local.toWord ?? '',
+          candidate.alignment?.origin || '',
+          record.jobId ?? '',
+          candidate.rawCandidateId || '',
+          candidate.score,
+          candidate.normScore,
+          candidate.alignmentScore,
           candidate.fullAlignment ? 1 : 0
         ]);
       }
     }
     return rows.map(row => row.map(TR.utils.csvEscape).join(',')).join('\r\n');
   }
+
 };

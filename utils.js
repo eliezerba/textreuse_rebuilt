@@ -152,6 +152,7 @@ TR.utils = (() => {
   }
 
   function parseAlignmentPairs(details) {
+    if (Array.isArray(details?.__normalizedAlignment?.pairs)) return details.__normalizedAlignment.pairs.map(pair => ({ ...pair }));
     let sequence = details?.alignment_sequence;
     if (!sequence) return [];
     if (typeof sequence === 'string') {
@@ -175,6 +176,48 @@ TR.utils = (() => {
     return pairs;
   }
 
+
+  function normalizedAlignment(details) {
+    if (details?.__normalizedAlignment && typeof details.__normalizedAlignment === 'object') return details.__normalizedAlignment;
+    const directPairs = parseAlignmentPairs(details || {});
+    if (directPairs.length) {
+      return {
+        origin: 'alignment_sequence',
+        direct: true,
+        pairs: directPairs,
+        sourceEvidence: [],
+        candidateEvidence: [],
+        synopsisTable: details?.synopsis_table ?? null
+      };
+    }
+
+    const matrixEvidence = (matrix, side) => Array.isArray(matrix)
+      ? matrix.map((value, index) => ({ side, index, strength: Number(value) })).filter(item => Number.isFinite(item.strength) && item.strength > 0)
+      : [];
+    const sourceEvidence = matrixEvidence(details?.suspect_matrix, 'source');
+    const candidateEvidence = matrixEvidence(details?.source_matrix, 'candidate');
+    if (sourceEvidence.length || candidateEvidence.length) {
+      return {
+        origin: 'matrix',
+        direct: false,
+        pairs: [],
+        sourceEvidence,
+        candidateEvidence,
+        synopsisTable: details?.synopsis_table ?? null
+      };
+    }
+
+    const hasHtml = Boolean(details?.seq_source_html || details?.seq_passage_html || details?.passage_html || details?.source_html);
+    return {
+      origin: hasHtml ? 'html-inferred' : 'none',
+      direct: false,
+      pairs: [],
+      sourceEvidence: [],
+      candidateEvidence: [],
+      synopsisTable: details?.synopsis_table ?? null
+    };
+  }
+
   function alignmentTone(kind, strength = 1) {
     const normalized = String(kind || '').toLowerCase();
     if (normalized.includes('exact') || strength >= 0.95) return 'exact';
@@ -190,9 +233,33 @@ TR.utils = (() => {
     }));
   }
 
+  function safeCssColor(value) {
+    const color = String(value || '').replace(/\s*!important\s*$/i, '').trim();
+    if (!color) return '';
+    if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
+    if (/^(?:rgb|rgba|hsl|hsla|color)\([^;{}]{1,120}\)$/i.test(color)) return color;
+    if (/^[a-z]{3,32}$/i.test(color)) return color;
+    return '';
+  }
+
+  function htmlColor(rawStyle) {
+    const style = String(rawStyle || '');
+    return safeCssColor(style.match(/(?:^|;)\s*color\s*:\s*([^;]+)/i)?.[1]?.trim() || '');
+  }
+
+  function htmlBackgroundColor(rawStyle) {
+    const style = String(rawStyle || '');
+    const direct = style.match(/background-color\s*:\s*([^;]+)/i)?.[1]?.trim()
+      || style.match(/(?:^|;)\s*background\s*:\s*([^;]+)/i)?.[1]?.trim()
+      || '';
+    return safeCssColor(direct);
+  }
+
   function htmlTone(rawStyle) {
     const style = String(rawStyle || '').toLowerCase();
-    const colorValue = style.match(/color\s*:\s*([^;\s]+)/)?.[1] || '';
+    const textColor = htmlColor(rawStyle).toLowerCase();
+    const backgroundColor = htmlBackgroundColor(rawStyle).toLowerCase();
+    const colorValue = textColor || backgroundColor;
     const isBlack = /^(#000000|black|rgb\(0,\s*0,\s*0\))$/.test(colorValue);
     const isGreen = /green|#a1f0a9|#00(?:80)?00/.test(colorValue);
     const isBold = /font-weight\s*:\s*(bold|[6-9]00)/.test(style);
@@ -214,17 +281,20 @@ TR.utils = (() => {
 
     function visit(node, inheritedTone = null) {
       if (node.nodeType === Node.TEXT_NODE) {
+        const info = inheritedTone && typeof inheritedTone === 'object' ? inheritedTone : { tone: inheritedTone, color: '', backgroundColor: '' };
         String(node.textContent || '').split(/\s+/).filter(Boolean).forEach(raw => {
-          tokens.push({ raw, normalized: normalizeText(raw), tone: inheritedTone });
+          tokens.push({ raw, normalized: normalizeText(raw), tone: info.tone || null, color: info.color || '', backgroundColor: info.backgroundColor || '' });
         });
         return;
       }
       if (node.nodeType !== Node.ELEMENT_NODE) return;
-      const ownTone = node.tagName.toUpperCase() === 'SPAN'
-        ? htmlTone(`${node.getAttribute('style') || ''}${node.getAttribute('color') ? `;color:${node.getAttribute('color')}` : ''}`)
-        : null;
-      const tone = ownTone || inheritedTone;
-      for (const child of node.childNodes) visit(child, tone);
+      const ownStyle = `${node.getAttribute('style') || ''}${node.getAttribute('color') ? `;color:${node.getAttribute('color')}` : ''}`;
+      const ownTone = htmlTone(ownStyle);
+      const ownColor = htmlColor(ownStyle);
+      const ownBackground = htmlBackgroundColor(ownStyle);
+      const inherited = inheritedTone && typeof inheritedTone === 'object' ? inheritedTone : { tone: inheritedTone, color: '', backgroundColor: '' };
+      const styleInfo = { tone: ownTone || inherited.tone || null, color: ownColor || inherited.color || '', backgroundColor: ownBackground || inherited.backgroundColor || '' };
+      for (const child of node.childNodes) visit(child, styleInfo);
     }
 
     for (const child of template.content.childNodes) visit(child, null);
@@ -277,7 +347,7 @@ TR.utils = (() => {
     for (const [textIndex, htmlIndex] of pairs) {
       const tone = htmlTokens[htmlIndex]?.tone;
       if (!tone) continue;
-      map.set(textIndex, { tone, strength: tone === 'exact' ? 1 : tone === 'related' ? 0.72 : 0.45, kind: 'html' });
+      map.set(textIndex, { tone, color: htmlTokens[htmlIndex]?.color || '', backgroundColor: htmlTokens[htmlIndex]?.backgroundColor || '', strength: tone === 'exact' ? 1 : tone === 'related' ? 0.72 : 0.45, kind: 'html' });
     }
     return map;
   }
@@ -380,6 +450,8 @@ TR.utils = (() => {
   }
 
   function alignmentIndexMap(details, role) {
+    const stored = details?.__alignmentMaps?.[role];
+    if (Array.isArray(stored)) return new Map(stored.map(([index, match]) => [Number(index), { ...match }]));
     const cacheable = details && typeof details === 'object';
     const cached = cacheable ? alignmentMapCache.get(details)?.get(role) : null;
     if (cached) return cached;
@@ -401,11 +473,19 @@ TR.utils = (() => {
       const rank = tone === 'exact' ? 3 : tone === 'related' ? 2 : 1;
       const currentRank = current?.tone === 'exact' ? 3 : current?.tone === 'related' ? 2 : current ? 1 : 0;
       if (!current || rank > currentRank || pair.strength > current.strength) {
-        map.set(index, { tone, strength: clamp(pair.strength, 0.15, 1), kind: pair.kind });
+        map.set(index, { tone, color: pair.color || '', strength: clamp(pair.strength, 0.15, 1), kind: pair.kind });
       }
     }
 
-    if (map.size) return remember(map);
+    if (map.size) {
+      const ownText = role === 'original' ? (details?.passage_text || '') : (details?.source_text || '');
+      const htmlMap = tonesFromOwnHtml(ownText, chooseAlignedHtml(details || {}, role));
+      for (const [index, htmlMatch] of htmlMap.entries()) {
+        const current = map.get(index);
+        if (current && (htmlMatch.color || htmlMatch.backgroundColor)) map.set(index, { ...current, color: htmlMatch.color || current.color || '', backgroundColor: htmlMatch.backgroundColor || current.backgroundColor || '' });
+      }
+      return remember(map);
+    }
     const matrix = role === 'original' ? details?.suspect_matrix : details?.source_matrix;
     if (Array.isArray(matrix)) {
       matrix.forEach((value, index) => {
@@ -414,23 +494,48 @@ TR.utils = (() => {
         map.set(index, { tone: alignmentTone('matrix', strength), strength: clamp(strength, 0.15, 1), kind: 'matrix' });
       });
     }
-    return remember(map.size ? map : inferredAlignmentIndexMap(details, role));
+    if (map.size) {
+      const ownText = role === 'original' ? (details?.passage_text || '') : (details?.source_text || '');
+      const htmlMap = tonesFromOwnHtml(ownText, chooseAlignedHtml(details || {}, role));
+      for (const [index, htmlMatch] of htmlMap.entries()) {
+        const current = map.get(index);
+        if (current && (htmlMatch.color || htmlMatch.backgroundColor)) map.set(index, { ...current, color: htmlMatch.color || current.color || '', backgroundColor: htmlMatch.backgroundColor || current.backgroundColor || '' });
+      }
+      return remember(map);
+    }
+    return remember(inferredAlignmentIndexMap(details, role));
   }
 
   function alignedTextHtml(details, role, options = {}) {
     const text = role === 'original' ? (details?.passage_text || '') : (details?.source_text || '');
+    const color = options.color || '#2f6b50';
+    const colorMode = options.colorMode === 'original' ? 'original' : 'system';
+
+    // Exact TEXTREUSE-color mode: render the original aligned HTML for this
+    // side directly (after sanitizing safe visual styles). Do not remap colors
+    // through token indices/LCS, which can shift a color when punctuation,
+    // vocalization or spelling differs between the aligned strings.
+    if (colorMode === 'original') {
+      return sanitizeOriginalAlignmentHtml(chooseAlignedHtml(details || {}, role));
+    }
+
     const tokens = String(text).trim().split(/\s+/).filter(Boolean);
     const matches = alignmentIndexMap(details, role);
-    const color = options.color || '#2f6b50';
     if (tokens.length && matches.size) {
       return tokens.map((token, index) => {
         const match = matches.get(index);
         if (!match) return `<span class="alignment-plain-token">${escapeHtml(token)}</span>`;
-        const opacity = `${Math.round((0.14 + match.strength * 0.22) * 100)}%`;
-        return `<span class="alignment-token ${match.tone}" style="--match-color:${escapeHtml(color)};--match-opacity:${opacity}" data-alignment-index="${index}">${escapeHtml(token)}</span>`;
+        const useOriginalColor = colorMode === 'original' && Boolean(match.color || match.backgroundColor);
+        const matchColor = useOriginalColor ? (match.color || match.backgroundColor || color) : color;
+        const opacity = useOriginalColor ? '18%' : `${Math.round((0.14 + match.strength * 0.22) * 100)}%`;
+        const originalClass = useOriginalColor ? ' original-source-color' : '';
+        const originalStyle = useOriginalColor
+          ? `${match.color ? `;--original-text-color:${escapeHtml(match.color)}` : ''}${match.backgroundColor ? `;--original-bg-color:${escapeHtml(match.backgroundColor)}` : ''}`
+          : '';
+        return `<span class="alignment-token ${match.tone}${originalClass}" style="--match-color:${escapeHtml(matchColor)};--match-opacity:${opacity}${originalStyle}" data-original-color="${escapeHtml(match.color || '')}" data-original-background="${escapeHtml(match.backgroundColor || '')}" data-alignment-index="${index}">${escapeHtml(token)}</span>`;
       }).join(' ');
     }
-    return sanitizeAlignmentHtml(chooseAlignedHtml(details || {}, role), { color });
+    return sanitizeAlignmentHtml(chooseAlignedHtml(details || {}, role), { color, preserveOriginalColors: colorMode === 'original' });
   }
 
   function stripHtml(html) {
@@ -439,8 +544,47 @@ TR.utils = (() => {
     return template.content.textContent || '';
   }
 
+  function sanitizeOriginalAlignmentHtml(html) {
+    if (typeof document === 'undefined') return String(html || '');
+    const template = document.createElement('template');
+    template.innerHTML = String(html ?? '')
+      .replace(/<text\b/gi, '<span')
+      .replace(/<\/text>/gi, '</span>')
+      .replace(/<font\b/gi, '<span')
+      .replace(/<\/font>/gi, '</span>');
+
+    const out = document.createDocumentFragment();
+    const allowedBlocks = new Set(['P', 'BR', 'DIV']);
+
+    function visit(node, parent) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        parent.append(document.createTextNode(node.textContent || ''));
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = node.tagName.toUpperCase();
+      if (tag === 'BR') { parent.append(document.createElement('br')); return; }
+      const wrapper = document.createElement(allowedBlocks.has(tag) ? tag.toLowerCase() : 'span');
+      const rawStyle = `${node.getAttribute('style') || ''}${node.getAttribute('color') ? `;color:${node.getAttribute('color')}` : ''}`;
+      const textColor = htmlColor(rawStyle);
+      const backgroundColor = htmlBackgroundColor(rawStyle);
+      if (textColor) wrapper.style.color = textColor;
+      if (backgroundColor) wrapper.style.backgroundColor = backgroundColor;
+      const weight = String(rawStyle).match(/font-weight\s*:\s*(bold|[1-9]00)/i)?.[1];
+      if (weight) wrapper.style.fontWeight = weight;
+      for (const child of node.childNodes) visit(child, wrapper);
+      parent.append(wrapper);
+    }
+
+    for (const child of template.content.childNodes) visit(child, out);
+    const container = document.createElement('div');
+    container.append(out);
+    return container.innerHTML;
+  }
+
   function sanitizeAlignmentHtml(html, options = {}) {
     const matchColor = options.color || '#2f6b50';
+    const preserveOriginalColors = Boolean(options.preserveOriginalColors);
     const template = document.createElement('template');
     const normalized = String(html ?? '')
       .replace(/<text\b/gi, '<span')
@@ -466,11 +610,23 @@ TR.utils = (() => {
       }
 
       const wrapper = document.createElement(allowedBlocks.has(tag) ? tag.toLowerCase() : 'span');
-      if (tag === 'SPAN') {
+      if (tag === 'SPAN' || node.hasAttribute('style') || node.hasAttribute('color')) {
         const rawStyle = `${node.getAttribute('style') || ''}${node.getAttribute('color') ? `;color:${node.getAttribute('color')}` : ''}`.toLowerCase();
         const tone = htmlTone(rawStyle);
+        const originalColor = htmlColor(rawStyle);
+        const originalBackground = htmlBackgroundColor(rawStyle);
         if (tone) wrapper.className = `alignment-token ${tone}`;
-        if (wrapper.className) wrapper.style.setProperty('--match-color', matchColor);
+        if (wrapper.className) {
+          wrapper.style.setProperty('--match-color', preserveOriginalColors && (originalColor || originalBackground) ? (originalColor || originalBackground) : matchColor);
+          wrapper.style.setProperty('--match-opacity', preserveOriginalColors && (originalColor || originalBackground) ? '28%' : '24%');
+          if (originalColor) wrapper.dataset.originalColor = originalColor;
+          if (originalBackground) wrapper.dataset.originalBackground = originalBackground;
+          if (preserveOriginalColors && (originalColor || originalBackground)) {
+            wrapper.classList.add('original-source-color');
+            if (originalColor) wrapper.style.setProperty('--original-text-color', originalColor);
+            if (originalBackground) wrapper.style.setProperty('--original-bg-color', originalBackground);
+          }
+        }
       }
       for (const child of node.childNodes) visit(child, wrapper);
       parent.append(wrapper);
@@ -531,7 +687,7 @@ TR.utils = (() => {
   return {
     $, $$, clamp, finite, normalizeText, escapeHtml, humanize, compactNumber,
     percent, debounce, nextFrame, hashColor, scoreTone, locationParts, chapterKey,
-    chooseAlignedHtml, parseAlignmentPairs, alignmentIndexMap, alignedTextHtml, sanitizeAlignmentHtml, stripHtml, tokenCount, downloadText,
+    chooseAlignedHtml, parseAlignmentPairs, normalizedAlignment, alignmentIndexMap, alignedTextHtml, sanitizeOriginalAlignmentHtml, sanitizeAlignmentHtml, styledHtmlTokens, safeCssColor, htmlColor, htmlBackgroundColor, htmlTone, stripHtml, tokenCount, downloadText,
     rowsToCsv, csvEscape, fetchJson, setBusy
   };
 })();

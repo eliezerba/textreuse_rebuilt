@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the local TextReuse viewer and expose the JSON files in its folder."""
+"""Start the local TextReuse viewer and expose supported data files in its folder."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ END_PORT = 8865
 
 
 def discover_json_files(app_dir: Path | str) -> list[Path]:
-    """Find JSON datasets near the app directory, including sibling dataset folders."""
+    """Find JSON/JSONL/NDJSON data files near the app directory, including sibling dataset folders."""
     try:
         app_dir = Path(app_dir).resolve(strict=False)
     except OSError:
@@ -47,7 +47,10 @@ def discover_json_files(app_dir: Path | str) -> list[Path]:
     for root in search_roots:
         if not root.exists() or not root.is_dir():
             continue
-        for path in sorted(root.glob("*.json"), key=lambda item: item.name.casefold()):
+        candidates: list[Path] = []
+        for pattern in ("*.json", "*.jsonl", "*.ndjson"):
+            candidates.extend(root.glob(pattern))
+        for path in sorted(candidates, key=lambda item: item.name.casefold()):
             if not path.is_file():
                 continue
             try:
@@ -68,7 +71,7 @@ class ReusableThreadingHTTPServer(socketserver.ThreadingTCPServer):
 
 
 class TextReuseHandler(http.server.SimpleHTTPRequestHandler):
-    """Static file handler with read-only JSON discovery and file endpoints."""
+    """Static file handler with read-only data discovery and file endpoints."""
 
     app_dir: Path
     allowed_json_files: tuple[Path, ...] = ()
@@ -127,12 +130,27 @@ class TextReuseHandler(http.server.SimpleHTTPRequestHandler):
             self._send_json({"error": "file not found"}, 404)
             return
 
-        body = candidate.read_bytes()
+        # Stream the file instead of reading it into server memory. This is
+        # essential for multi-hundred-MB and 1GB+ corpora: the browser-side
+        # large-file worker can consume the response incrementally without the
+        # local Python server first allocating a second full copy of the file.
+        stat = candidate.stat()
         self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
+        content_type = "application/x-ndjson; charset=utf-8" if candidate.suffix.lower() in {".jsonl", ".ndjson"} else "application/json; charset=utf-8"
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(stat.st_size))
         self.end_headers()
-        self.wfile.write(body)
+        with candidate.open("rb") as source:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    # The user may cancel a large-file load. Treat that as a
+                    # normal client disconnect instead of crashing the server.
+                    break
 
     def _send_json(self, payload: object, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -166,7 +184,7 @@ def main() -> int:
     url = f"http://localhost:{selected_port}/"
     print("TextReuse viewer is running.")
     print(f"Open: {url}")
-    print("JSON files placed beside index.html will appear in the data-source picker.")
+    print("JSON/JSONL/NDJSON files placed beside index.html will appear in the data-source picker.")
     print("Press Ctrl+C to stop the server.")
 
     timer = threading.Timer(1.0, lambda: webbrowser.open(url))

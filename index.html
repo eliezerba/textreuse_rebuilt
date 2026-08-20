@@ -18,8 +18,8 @@
     </div>
     <div class="header-actions">
       <button id="langToggleBtn" class="secondary-button" type="button">EN</button>
-      <input id="fileInput" type="file" accept="application/json,.json" multiple hidden>
-      <button id="loadFileBtn" class="primary-button" type="button">בחירת מאגרי JSON</button>
+      <input id="fileInput" type="file" accept="application/json,.json,.jsonl,.ndjson,application/x-ndjson" multiple hidden>
+      <button id="loadFileBtn" class="primary-button" type="button">בחירת קובצי נתונים</button>
       <button id="exportCsvBtn" class="secondary-button" type="button">ייצוא CSV</button>
     </div>
   </header>
@@ -30,6 +30,7 @@
     <div><span>קטעי מקור</span><strong id="recordCount">0</strong></div>
     <div><span>קטעי דאטהסט</span><strong id="candidateCount">0</strong></div>
     <div><span>ספרים</span><strong id="bookCount">0</strong></div>
+    <div><span>Passage Registry</span><strong id="registryStatus">0 קטעים</strong></div>
     <div class="metadata-status-cell">
       <span>ספריא</span>
       <strong id="metadataStatus">לא התחיל</strong>
@@ -41,9 +42,9 @@
     <section id="emptyState" class="empty-state">
       <div class="empty-state-card">
         <span class="empty-icon">↗</span>
-        <h2>טען את תוצר ה־TEXTREUSE</h2>
-        <p data-empty-message>המערכת מאתרת את כל קובצי ה־JSON שבתיקייה ומאפשרת לטעון אחד מהם או כמה יחד.</p>
-        <button type="button" class="primary-button" data-open-sources>בחירת מאגרי JSON</button>
+        <h2>טען תוצרי TEXTREUSE וקובצי קורפוס</h2>
+        <p data-empty-message>המערכת מאתרת קובצי JSON/NDJSON, מזהה אוטומטית תוצרי TEXTREUSE מול קובצי קורפוס, ומאפשרת לטעון כמה מקורות יחד.</p>
+        <button type="button" class="primary-button" data-open-sources>בחירת קובצי נתונים</button>
         <button type="button" class="secondary-button" data-open-file>בחירת קבצים מהמחשב</button>
         <p class="small-note">לטעינה אוטומטית יש להפעיל את התיקייה באמצעות שרת מקומי. הוראות מלאות נמצאות בקובץ README.</p>
       </div>
@@ -184,6 +185,14 @@
               <button id="addActiveCandidateBtn" type="button" class="secondary-button">הוסף מועמד לסינופסיס</button>
               <button id="openSynopsisBtn" type="button" class="primary-button">פתח סינופסיס</button>
               <span id="synopsisQuickCount" class="selection-status">לא נבחרו קטעים מן הדאטהסט</span>
+              <div class="segmented-control text-mode-switch" role="group" aria-label="סוג הטקסט להצגה">
+                <button type="button" class="is-active" data-text-mode="analysis">טקסט לניתוח</button>
+                <button type="button" data-text-mode="original">נוסח מקורי</button>
+              </div>
+              <div class="segmented-control color-mode-switch" role="group" aria-label="מקור צבעי היישור">
+                <button type="button" class="is-active" data-color-mode="system">צבעי המערכת</button>
+                <button type="button" data-color-mode="original">צבעי TEXTREUSE</button>
+              </div>
             </div>
 
             <div class="metric-strip" aria-label="ציוני ההתאמה">
@@ -218,6 +227,11 @@
               <span><i class="legend-swatch neutral"></i> טקסט שאינו מיושר</span>
             </div>
 
+            <details id="alignmentInspector" class="research-details">
+              <summary>פרטי יישור ו־provenance</summary>
+              <div id="alignmentInspectorBody" class="research-details-body"></div>
+            </details>
+
             <section class="metadata-pair">
               <article id="originalMetadata" class="metadata-card"></article>
               <article id="candidateMetadata" class="metadata-card"></article>
@@ -250,6 +264,14 @@
             <div class="segmented-control synopsis-mode-switch" role="group" aria-label="מצב הסינופסיס">
               <button type="button" class="is-active" data-synopsis-mode="single">קטע יחיד</button>
               <button type="button" data-synopsis-mode="continuous">קריאה רציפה</button>
+            </div>
+            <div class="segmented-control text-mode-switch" role="group" aria-label="ייצוג הטקסט בסינופסיס">
+              <button type="button" class="is-active" data-text-mode="analysis">טקסט לניתוח</button>
+              <button type="button" data-text-mode="original">נוסח מקורי</button>
+            </div>
+            <div class="segmented-control color-mode-switch" role="group" aria-label="מקור צבעי היישור בסינופסיס">
+              <button type="button" class="is-active" data-color-mode="system">צבעי המערכת</button>
+              <button type="button" data-color-mode="original">צבעי TEXTREUSE</button>
             </div>
             <label class="checkbox-control"><input id="syncSynopsisScrollInput" type="checkbox" checked><span>גלילה מסונכרנת</span></label>
             <label class="column-width-control"><span>רוחב עמודה</span><input id="synopsisColumnWidthInput" type="range" min="280" max="560" step="20" value="380"></label>
@@ -374,14 +396,14 @@
         <div class="visualization-header">
           <div>
             <p class="pane-kicker">קורפוס ההשוואה</p>
-            <h2>קטלוג הספרים והמטא־דאטה מספריא</h2>
-            <p>הטבלה מסכמת את נוכחות כל ספר בתוצאות; הכרטיס מציג מחבר, זמן ומקום חיבור ותיאור מספריא.</p>
+            <h2>קטלוג הספרים והמטא־דאטה</h2>
+            <p>הטבלה מסכמת את נוכחות כל ספר בתוצאות ומשלבת מטא־דאטה מקומי, ספריא ו־DTS כאשר הם זמינים.</p>
           </div>
         </div>
         <div class="library-layout">
           <div class="table-card">
             <table class="library-table">
-              <thead><tr><th>ספר</th><th>קטעי ספר</th><th>קטעי דאטהסט</th><th>ציון מרבי</th><th>יישור מלא</th><th>מחבר</th><th>מטא־דאטה</th></tr></thead>
+              <thead><tr><th>ספר</th><th>קטעי ספר</th><th>קטעי דאטהסט</th><th>ציון מרבי</th><th>יישור מלא</th><th>מחבר</th><th>מקור ידע</th><th>מטא־דאטה</th></tr></thead>
               <tbody id="libraryTableBody"></tbody>
             </table>
           </div>
@@ -409,11 +431,13 @@
         <div class="diagnostic-summary" id="diagnosticSummary"></div>
         <div class="table-card diagnostic-table-card">
           <table class="diagnostic-table">
-            <thead><tr><th>מאגר</th><th>ספר / מיקום</th><th>תבנית שנוצרה</th><th>תוצאה</th><th>שיטת פתרון</th><th>הסבר</th></tr></thead>
+            <thead><tr><th>מאגר</th><th>ספר / מיקום</th><th>תבנית שנוצרה</th><th>ידע מקומי</th><th>תוצאה</th><th>שיטת פתרון</th><th>הסבר</th></tr></thead>
             <tbody id="diagnosticTableBody"></tbody>
           </table>
         </div>
       </section>
+
+
     </section>
   </main>
 
@@ -422,8 +446,8 @@
       <div class="source-dialog-head">
         <div>
           <p class="pane-kicker">מקורות נתונים</p>
-          <h2>איזה קובצי JSON לטעון?</h2>
-          <p>אפשר לבחור קובץ אחד או כמה. קבצים שכבר נטענו יישארו זמינים וניתן להפעיל או להסתיר אותם בכל עת.</p>
+          <h2>אילו קובצי נתונים לטעון?</h2>
+          <p>אפשר לערבב תוצרי TEXTREUSE עם קובצי קורפוס JSON/NDJSON. קובצי הקורפוס מעשירים את ה־Passage Registry ואינם מחליפים את תוצאות ההתאמה.</p>
         </div>
         <button id="closeSourceDialogBtn" class="icon-button" value="cancel" type="submit" aria-label="סגירה">×</button>
       </div>
@@ -478,8 +502,12 @@
   <script src="i18n.js" defer></script>
   <script src="utils.js" defer></script>
   <script src="ref-templates.js" defer></script>
+  <script src="knowledge.js" defer></script>
+  <script src="large-files.js" defer></script>
+  <script src="data-adapters.js" defer></script>
   <script src="data-model.js" defer></script>
   <script src="sefaria.js" defer></script>
+  <script src="resolvers.js" defer></script>
   <script src="genizah.js" defer></script>
   <script src="visualizations.js" defer></script>
   <script src="app.js" defer></script>

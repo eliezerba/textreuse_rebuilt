@@ -6,6 +6,10 @@ TR.app = (() => {
   const state = {
     sources: new Map(),
     activeSourceIds: new Set(),
+    activeCorpusSourceIds: new Set(),
+    registry: new TR.CorpusRegistry({ label: 'empty' }),
+    textMode: 'analysis',
+    colorMode: 'system',
     pickerSelection: new Set(),
     model: null,
     activeRecordId: null,
@@ -28,6 +32,7 @@ TR.app = (() => {
     genizahRequestId: 0,
     activeGenizahMetadata: null,
     visibleRecords: [],
+    candidateList: { recordId: '', limit: 300, step: 300 },
     loading: false,
     loadingFallbackTimer: null,
     sourceCounter: 0,
@@ -66,6 +71,7 @@ TR.app = (() => {
   const els = {};
   const sefaria = new TR.SefariaService();
   const genizah = new TR.GenizahService(TR.config.genizah || {});
+  const resolverHub = new TR.ResolverHub({ sefaria });
   const t = (he, en) => (TR.i18n?.t ? TR.i18n.t(he, en) : he);
 
   function init() {
@@ -80,7 +86,7 @@ TR.app = (() => {
 
   function cacheElements() {
     const ids = [
-      'fileInput', 'loadFileBtn', 'datasetName', 'datasetStatus', 'metadataStatus',
+      'fileInput', 'loadFileBtn', 'datasetName', 'datasetStatus', 'metadataStatus', 'registryStatus',
       'recordCount', 'candidateCount', 'bookCount', 'emptyState', 'workspace',
       'loadingOverlay', 'loadingTitle', 'loadingProgress', 'loadingDetail', 'searchInput',
       'minNormInput', 'minNormValue', 'minScoreInput', 'minScoreValue', 'exactOnlyInput',
@@ -89,7 +95,7 @@ TR.app = (() => {
       'bookMultiSelect', 'bookMultiSummary', 'bookMultiOptions',
       'categoryMultiSelect', 'categoryMultiSummary', 'categoryMultiOptions',
       'sourceList', 'sourceListCount', 'sourceRailTitle', 'sourceRailSubtitle', 'sourceTitle', 'sourceRef', 'sourceText', 'candidateTitle',
-      'candidateRef', 'candidateText', 'scoreRaw', 'scoreNorm', 'scoreAlignment', 'scoreFull',
+      'candidateRef', 'candidateText', 'scoreRaw', 'scoreNorm', 'scoreAlignment', 'scoreFull', 'alignmentInspectorBody',
       'candidateList', 'candidateListCount', 'prevRecordBtn', 'nextRecordBtn', 'prevCandidateBtn',
       'nextCandidateBtn', 'originalMetadata', 'candidateMetadata', 'alignmentNote', 'matrixMetricSelect',
       'matrixGranularitySelect', 'matrixBooksInput', 'matrixBooksValue', 'heatmapContainer',
@@ -118,6 +124,8 @@ TR.app = (() => {
     els.tabs = TR.utils.$$('.view-tab');
     els.views = TR.utils.$$('.view-panel');
     els.synopsisModeButtons = TR.utils.$$('[data-synopsis-mode]');
+    els.textModeButtons = TR.utils.$$('[data-text-mode]');
+    els.colorModeButtons = TR.utils.$$('[data-color-mode]');
     els.synopsisView = document.querySelector('.synopsis-view');
   }
 
@@ -128,6 +136,20 @@ TR.app = (() => {
     document.addEventListener('tr-language-changed', () => {
       renderAll();
     });
+    els.textModeButtons.forEach(button => button.addEventListener('click', () => {
+      state.textMode = button.dataset.textMode === 'original' ? 'original' : 'analysis';
+      els.textModeButtons.forEach(item => item.classList.toggle('is-active', item.dataset.textMode === state.textMode));
+    els.colorModeButtons.forEach(item => item.classList.toggle('is-active', item.dataset.colorMode === state.colorMode));
+      renderComparison();
+      if (state.activeView === 'synopsis') renderSynopsis();
+    }));
+    els.colorModeButtons.forEach(button => button.addEventListener('click', () => {
+      state.colorMode = button.dataset.colorMode === 'original' ? 'original' : 'system';
+      els.colorModeButtons.forEach(item => item.classList.toggle('is-active', item.dataset.colorMode === state.colorMode));
+      renderComparison();
+      if (state.activeView === 'synopsis') renderSynopsis();
+      savePreferences();
+    }));
 
     els.loadFileBtn.addEventListener('click', openSourceDialog);
     els.emptyState.addEventListener('click', event => {
@@ -195,8 +217,26 @@ TR.app = (() => {
     els.resetFiltersBtn.addEventListener('click', resetFilters);
     els.exportCsvBtn.addEventListener('click', exportCsv);
     els.retryMetadataBtn.addEventListener('click', hydrateBookMetadata);
+    els.openActiveInSynopsisBtn?.addEventListener('click', () => { const record = activeRecord(); if (record && !selectedCandidatesForRecord(record.id).size && activeCandidate()) toggleCandidateSynopsis(record.id, activeCandidate().id, true); setView('synopsis'); });
+
     els.candidateMetadata.addEventListener('click', event => {
       if (event.target.closest('[data-open-genizah-image]')) openGenizahImageDialog();
+    });
+    els.alignmentInspectorBody?.addEventListener('click', async event => {
+      const button = event.target.closest('[data-load-large-raw]');
+      if (!button) return;
+      const record = activeRecord(); const candidate = activeCandidate();
+      if (!record || !candidate) return;
+      button.disabled = true; button.textContent = 'טוען raw…';
+      try {
+        const rawRecord = await TR.largeFiles.getRecord(candidate.datasetId, candidate.rawRecordId);
+        if (!rawRecord) throw new Error('הרשומה הגולמית לא נמצאה ב-IndexedDB.');
+        const rawCandidate = (rawRecord.candidates || []).find((item, index) => String(item.elastic_id ?? index) === String(candidate.rawCandidateId)) || null;
+        const pre = document.createElement('pre'); pre.className = 'raw-data-block'; pre.textContent = JSON.stringify({ record: rawRecord, candidate: rawCandidate }, null, 2);
+        button.replaceWith(pre);
+      } catch (error) {
+        button.disabled = false; button.textContent = `טעינה נכשלה: ${error.message}`;
+      }
     });
     if (els.genizahImageDialog) {
       els.genizahImageDialog.addEventListener('close', () => {
@@ -329,7 +369,7 @@ TR.app = (() => {
   }
 
   async function discoverAndStart() {
-    setLoading(true, 'מאתר קובצי JSON', 'סורק את תיקיית המערכת…', 8);
+    setLoading(true, 'מאתר קובצי נתונים', 'סורק JSON / NDJSON בתיקיית המערכת…', 8);
     const [serverResult, remoteResult] = await Promise.allSettled([
       discoverServerSources(),
       discoverRemoteSources()
@@ -343,15 +383,15 @@ TR.app = (() => {
       state.pickerSelection = new Set([allSources[0].id]);
       await loadSelectedSources([allSources[0].id]);
     } else if (allSources.length > 1) {
-      state.pickerSelection = new Set(state.activeSourceIds);
+      state.pickerSelection = new Set([...state.activeSourceIds, ...state.activeCorpusSourceIds]);
       renderSourcePicker();
-      showEmptyState(`נמצאו ${allSources.length} קובצי JSON. בחר קובץ אחד או כמה לטעינה.`);
+      showEmptyState(`נמצאו ${allSources.length} קובצי נתונים. בחר תוצרי TEXTREUSE וקובצי קורפוס לפי הצורך.`);
       openDialogSafely(els.sourceDialog);
     } else {
       try {
         await attemptLegacyDefault();
       } catch {
-        showEmptyState('לא נמצאו קובצי JSON באופן אוטומטי. אפשר לבחור כמה קבצים מהמחשב.');
+        showEmptyState('לא נמצאו קובצי JSON/NDJSON באופן אוטומטי. אפשר לבחור כמה קבצים מהמחשב.');
       }
     }
   }
@@ -428,7 +468,7 @@ TR.app = (() => {
       const response = await fetch(TR.config.defaultJson, { cache: 'no-store' });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const id = `server:${TR.config.defaultJson}`;
-      state.sources.set(id, { id, label: TR.config.defaultJson, origin: 'server', url: TR.config.defaultJson, size: 0, model: null, error: null });
+      state.sources.set(id, { id, label: TR.config.defaultJson, origin: 'server', url: TR.config.defaultJson, size: 0, model: null, registry: null, kind: null, error: null });
       await loadSelectedSources([id]);
     } catch {
       throw new Error('Legacy default JSON not found');
@@ -437,7 +477,7 @@ TR.app = (() => {
 
   async function openSourceDialog() {
     await Promise.allSettled([discoverServerSources(), discoverRemoteSources()]);
-    state.pickerSelection = new Set(state.activeSourceIds.size ? state.activeSourceIds : []);
+    state.pickerSelection = new Set([...state.activeSourceIds, ...state.activeCorpusSourceIds]);
     renderSourcePicker();
     openDialogSafely(els.sourceDialog);
   }
@@ -459,7 +499,7 @@ TR.app = (() => {
   function renderSourcePicker() {
     const sources = [...state.sources.values()].sort((a, b) => a.label.localeCompare(b.label, 'he'));
     if (!sources.length) {
-      els.sourcePickerList.innerHTML = '<div class="empty-list">לא נמצאו קובצי JSON בתיקייה. אפשר להוסיף כמה קבצים מהמחשב.</div>';
+      els.sourcePickerList.innerHTML = '<div class="empty-list">לא נמצאו קובצי JSON/NDJSON בתיקייה. אפשר להוסיף כמה קבצים מהמחשב.</div>';
       updatePickerNote();
       return;
     }
@@ -468,10 +508,11 @@ TR.app = (() => {
         <input type="checkbox" data-source-id="${TR.utils.escapeHtml(source.id)}" ${state.pickerSelection.has(source.id) ? 'checked' : ''}>
         <span class="source-picker-main">
           <b>${TR.utils.escapeHtml(source.label)}</b>
-          <small>${sourceOriginLabel(source)}${source.size ? ` · ${formatBytes(source.size)}` : ''}</small>
+          <small>${sourceOriginLabel(source)}${source.size ? ` · ${formatBytes(source.size)}` : ''}${((source.origin === 'local' && TR.largeFiles?.isLarge(source.file)) || Number(source.size || 0) >= (TR.largeFiles?.LARGE_THRESHOLD || Infinity) || source.largeFile) ? ` · <span class="large-file-badge">STREAM</span>` : ''}</small>
           ${source.error ? `<em>${TR.utils.escapeHtml(source.error)}</em>` : ''}
+          ${source.largeRawStoreError ? `<em>${TR.utils.escapeHtml(source.largeRawStoreError)}</em>` : ''}
         </span>
-        <span class="source-state ${source.model ? 'is-loaded' : ''}">${source.model ? 'נטען' : 'ממתין'}</span>
+        <span class="source-state ${(source.model || source.registry) ? 'is-loaded' : ''}">${source.model ? 'TEXTREUSE' : source.registry ? 'CORPUS' : 'ממתין'}</span>
       </label>`).join('');
     updatePickerNote();
   }
@@ -484,7 +525,7 @@ TR.app = (() => {
 
   function updatePickerNote() {
     const count = state.pickerSelection.size;
-    els.sourcePickerNote.textContent = count ? `נבחרו ${count} קבצים. הם יוצגו יחד ויישארו זמינים לבחירה מרובה בתוך המערכת.` : 'עדיין לא נבחר קובץ.';
+    els.sourcePickerNote.textContent = count ? `נבחרו ${count} קבצים. המערכת תזהה אוטומטית אילו מהם תוצאות TEXTREUSE ואילו מהם קובצי קורפוס/metadata.` : 'עדיין לא נבחר קובץ.';
     els.applySourceSelectionBtn.disabled = count === 0;
     els.applySourceSelectionBtn.textContent = count > 1 ? `טען ${count} מאגרים יחד` : 'טען את המאגר';
   }
@@ -495,11 +536,11 @@ TR.app = (() => {
     const newIds = [];
     for (const file of files) {
       const id = `local:${file.name}:${file.size}:${file.lastModified}:${++state.sourceCounter}`;
-      state.sources.set(id, { id, label: file.name, origin: 'local', file, size: file.size, modified: file.lastModified, model: null, error: null });
+      state.sources.set(id, { id, label: file.name, origin: 'local', file, size: file.size, modified: file.lastModified, model: null, registry: null, kind: null, error: null });
       newIds.push(id);
     }
     event.target.value = '';
-    state.pickerSelection = new Set([...state.activeSourceIds, ...newIds]);
+    state.pickerSelection = new Set([...state.activeSourceIds, ...state.activeCorpusSourceIds, ...newIds]);
     renderSourcePicker();
     await loadSelectedSources([...state.pickerSelection]);
   }
@@ -507,7 +548,7 @@ TR.app = (() => {
   async function loadSelectedSources(ids) {
     const requested = ids.map(id => state.sources.get(id)).filter(Boolean);
     if (!requested.length) {
-      showToast('יש לבחור לפחות קובץ JSON אחד.', 'error');
+      showToast('יש לבחור לפחות קובץ נתונים אחד.', 'error');
       return;
     }
 
@@ -517,7 +558,7 @@ TR.app = (() => {
     for (let index = 0; index < requested.length; index += 1) {
       const source = requested[index];
       try {
-        if (!source.model) await loadSourceModel(source, index, requested.length);
+        if (!source.model && !source.registry) await loadSourceModel(source, index, requested.length);
         source.error = null;
         successful.push(source);
       } catch (error) {
@@ -533,7 +574,16 @@ TR.app = (() => {
       return;
     }
 
-    state.activeSourceIds = new Set(successful.map(source => source.id));
+    state.activeSourceIds = new Set(successful.filter(source => source.model).map(source => source.id));
+    state.activeCorpusSourceIds = new Set(successful.filter(source => source.registry).map(source => source.id));
+    if (!state.activeSourceIds.size) {
+      closeSourceDialog();
+      setLoading(false);
+      renderSourcePicker();
+      showEmptyState(`נטענו ${state.activeCorpusSourceIds.size} קובצי קורפוס ל-Passage Registry, אך לא נבחר תוצר TEXTREUSE להצגה. בחר גם קובץ תוצאות כדי לפתוח את סביבת המחקר.`);
+      showToast('קובצי הקורפוס נטענו; נדרש גם תוצר TEXTREUSE להצגת ההתאמות.', 'info');
+      return;
+    }
     rebuildCombinedModel();
     closeSourceDialog();
     setLoading(true, 'מציג את המערכת', 'הנתונים מוכנים', 97);
@@ -554,19 +604,140 @@ TR.app = (() => {
   async function loadSourceModel(source, fileIndex, totalFiles) {
     const fileBase = (fileIndex / totalFiles) * 88;
     const fileShare = 88 / totalFiles;
-    setLoading(true, 'קורא קובץ JSON', `${source.label} · ${fileIndex + 1} מתוך ${totalFiles}`, 6 + fileBase);
+    setLoading(true, 'קורא קובץ נתונים', `${source.label} · ${fileIndex + 1} מתוך ${totalFiles}`, 6 + fileBase);
+
+    if ((source.origin === 'local' && TR.largeFiles?.isLarge(source.file)) || (source.origin !== 'local' && Number(source.size || 0) >= TR.largeFiles.LARGE_THRESHOLD)) {
+      return loadLargeSource(source, fileBase, fileShare);
+    }
+
     const text = source.origin === 'local'
       ? await source.file.text()
       : await fetchSourceText(source.url);
     await TR.utils.nextFrame();
-    let raw;
-    const normalizedText = String(text).replace(/^\uFEFF/, '');
-    try { raw = JSON.parse(normalizedText); }
-    catch (error) { throw new Error(`JSON לא תקין (${error.message})`); }
-    source.model = await TR.DataModel.fromRaw(raw, source.label, progress => {
+    const parsed = TR.dataAdapters.parseSourceText(text, source.label);
+    source.kind = parsed.kind;
+    if (parsed.kind === 'corpus') {
+      setLoading(true, 'בונה Passage Registry', `${source.label}: ${parsed.items.length} קטעים`, 6 + fileBase + fileShare * 0.75);
+      source.registry = TR.CorpusRegistry.fromItems(parsed.items, source.label, source.id);
+      source.model = null;
+      return;
+    }
+    source.registry = null;
+    source.model = await TR.DataModel.fromRaw(parsed.raw, source.label, progress => {
       const ratio = progress.total ? progress.current / progress.total : 0;
       setLoading(true, 'בונה מודל נתונים', `${source.label}: ${progress.current} מתוך ${progress.total} קטעים`, 6 + fileBase + ratio * fileShare);
     }, { datasetId: source.id });
+  }
+
+  async function loadLargeSource(source, fileBase, fileShare) {
+    const batchModels = [];
+    const registry = new TR.CorpusRegistry({ label: source.label, sourceId: source.id });
+    let inferredKind = '';
+    let processed = 0;
+    source.largeFile = true;
+    source.largeFileBytes = source.origin === 'local' ? source.file.size : Number(source.size || 0);
+    const largeBytes = source.origin === 'local' ? source.file.size : Number(source.size || 0);
+    let rawStoreEnabled = true;
+    let lastUiYield = performance.now();
+    let lastProgressPaint = 0;
+    source.largeRawStoreError = '';
+    if (largeBytes >= TR.largeFiles.VERY_LARGE_THRESHOLD) {
+      // Persistence/estimate are useful but must not delay the critical parse path.
+      TR.largeFiles.requestPersistence?.().catch?.(() => false);
+      TR.largeFiles.storageEstimate?.().then(value => { source.storageEstimate = value; }).catch?.(() => {});
+    }
+    const queueRawBatch = async (entries, approxBytes = 0) => {
+      if (!rawStoreEnabled || !entries?.length) return false;
+      try {
+        const write = TR.largeFiles.queueBatch
+          ? TR.largeFiles.queueBatch(source.id, entries, approxBytes)
+          : TR.largeFiles.putBatch(source.id, entries);
+        Promise.resolve(write).then(stored => {
+          if (stored === false) {
+            rawStoreEnabled = false;
+            source.largeRawStoreError = 'IndexedDB אינו זמין; ה־raw המלא לא יישמר מקומית.';
+          }
+        }).catch(error => {
+          rawStoreEnabled = false;
+          source.largeRawStoreError = `אחסון raw הופסק: ${error.message}`;
+        });
+        // Do not serialize parsing behind IndexedDB. Only slow the parser if the
+        // queued raw payload itself becomes large enough to threaten memory.
+        const status = TR.largeFiles.rawWriteStatus?.();
+        if (status && status.bytes > 96 * 1024 * 1024) {
+          await TR.largeFiles.waitForRawWrites?.(48 * 1024 * 1024);
+        }
+        return true;
+      } catch (error) {
+        rawStoreEnabled = false;
+        source.largeRawStoreError = `אחסון raw הופסק: ${error.message}`;
+        return false;
+      }
+    };
+    setLoading(true, 'טוען קובץ גדול בזרימה', `${source.label} · ${TR.largeFiles.compactFileSize(largeBytes)} · ללא טעינת הקובץ כולו לזיכרון`, 6 + fileBase);
+
+    const largeParser = source.origin === 'local'
+      ? (handlers => TR.largeFiles.parseFile(source.file, handlers))
+      : (handlers => TR.largeFiles.parseUrl(source.url, source.label, handlers));
+    const info = await largeParser({
+      onProgress(progress) {
+        const now = performance.now();
+        if (now - lastProgressPaint < 120 && progress.bytes < progress.totalBytes) return;
+        lastProgressPaint = now;
+        const ratio = progress.totalBytes ? progress.bytes / progress.totalBytes : 0;
+        setLoading(true, 'טוען קובץ גדול בזרימה', `${source.label}: ${progress.count || 0} רשומות · ${TR.largeFiles.compactFileSize(progress.bytes)} / ${TR.largeFiles.compactFileSize(progress.totalBytes)}`, 6 + fileBase + ratio * fileShare * 0.9);
+      },
+      async onBatch(message) {
+        inferredKind = inferredKind || message.kind;
+        if (message.kind === 'textreuse') {
+          const entries = message.entries || [];
+          await queueRawBatch(entries, Number(message.batchChars || 0));
+          const raw = Object.fromEntries(entries);
+          const model = await TR.DataModel.fromRaw(raw, source.label, () => {}, { datasetId: source.id, compact: true, largeSourceId: source.id });
+          batchModels.push(model);
+          processed += model.records.length;
+        } else if (message.kind === 'corpus') {
+          const items = message.items || [];
+          const rawEntries = items.map((item, index) => [String(item.location || item.Location || item.id || item.passage_id || item.passageId || `${source.label}:${processed + index + 1}`), item]);
+          await queueRawBatch(rawEntries, Number(message.batchChars || 0));
+          items.forEach((item, index) => {
+            const location = String(item.location || item.Location || item.id || item.passage_id || item.passageId || `${source.label}:${processed + index + 1}`);
+            const categories = Array.isArray(item.categories) ? item.categories : (Array.isArray(item.source_categories) ? item.source_categories : []);
+            const refTemplate = TR.refTemplates?.parseLocation(location, categories) || TR.utils.locationParts(location, categories);
+            const metadata = TR.knowledge.extractPassageMetadata(item, { location, label: source.label, sourceId: source.id, refTemplate });
+            metadata.largeRawRef = { sourceId: source.id, rawId: location };
+            metadata.analysisTextPreview = String(metadata.analysisText || '').slice(0, 360);
+            metadata.originalTextPreview = String(metadata.originalText || '').slice(0, 360);
+            metadata.analysisText = '';
+            metadata.originalText = '';
+            if (metadata.raw) metadata.raw = { __largeFile: true, location };
+            registry.add(metadata);
+          });
+          processed += items.length;
+        }
+        if (performance.now() - lastUiYield > 120) {
+          lastUiYield = performance.now();
+          await TR.utils.nextFrame();
+        }
+      }
+    });
+
+    if (!rawStoreEnabled && source.largeRawStoreError) {
+      showToast(`${source.label}: ${source.largeRawStoreError} המערכת תמשיך במצב preview קומפקטי.`, 'info');
+    }
+    source.kind = info.kind || inferredKind;
+    if (source.kind === 'textreuse') {
+      source.registry = null;
+      source.model = TR.DataModel.fromBatchModels(batchModels, source.label, { id: source.id, label: source.label, kind: 'textreuse', largeFile: true, bytes: largeBytes });
+      source.model.largeFile = true;
+      source.model.largeFileBytes = largeBytes;
+      source.model.largeFileRecordCount = processed;
+    } else if (source.kind === 'corpus') {
+      source.registry = registry;
+      source.model = null;
+    } else {
+      throw new Error('הקובץ הגדול לא זוהה כתוצר TEXTREUSE או כקורפוס נתמך.');
+    }
   }
 
   async function fetchSourceText(url) {
@@ -578,7 +749,15 @@ TR.app = (() => {
   function rebuildCombinedModel() {
     const models = [...state.activeSourceIds].map(id => state.sources.get(id)?.model).filter(Boolean);
     const labels = [...state.activeSourceIds].map(id => state.sources.get(id)?.label).filter(Boolean);
+    state.registry = TR.CorpusRegistry.combine(
+      [...state.activeCorpusSourceIds].map(id => state.sources.get(id)?.registry).filter(Boolean),
+      'Passage Registry'
+    );
+    resolverHub.setRegistry(state.registry);
     state.model = TR.DataModel.combine(models, labels.length === 1 ? labels[0] : `${labels.length} מאגרים`);
+    state.model.largeFile = models.some(model => Boolean(model.largeFile));
+    state.model.largeFileBytes = models.reduce((sum, model) => sum + Number(model.largeFileBytes || 0), 0);
+    state.model.attachRegistry(state.registry);
     state.activeRecordId = state.model.records[0]?.id || null;
     state.activeCandidateId = null;
     state.passageMetadata.clear();
@@ -603,8 +782,22 @@ TR.app = (() => {
     state.genizahWarmup.running = true;
     state.genizahWarmup.signature = signature;
 
-    const candidates = state.model.records.flatMap(record => record.candidates).filter(candidate => candidate.sourceFamily === 'geniza');
-    const uniqueCount = new Set(candidates.map(candidate => candidate.sourceLocation)).size;
+    const candidates = [];
+    const uniqueLocations = new Set();
+    const autoWarmupLimit = state.model.largeFile ? 0 : 5000;
+    if (autoWarmupLimit) {
+      outer: for (const record of state.model.records) {
+        for (const candidate of record.candidates || []) {
+          if (candidate.sourceFamily !== 'geniza') continue;
+          if (!uniqueLocations.has(candidate.sourceLocation)) {
+            uniqueLocations.add(candidate.sourceLocation);
+            candidates.push(candidate);
+          }
+          if (candidates.length >= autoWarmupLimit) break outer;
+        }
+      }
+    }
+    const uniqueCount = uniqueLocations.size;
     if (!uniqueCount) {
       state.genizahWarmup.running = false;
       return;
@@ -633,6 +826,7 @@ TR.app = (() => {
     els.recordCount.textContent = TR.utils.compactNumber(model.records.length, 0);
     els.candidateCount.textContent = TR.utils.compactNumber(model.candidateCount, 0);
     els.bookCount.textContent = TR.utils.compactNumber(model.books.filter(book => book.nonSelfCandidateCount > 0).length, 0);
+    els.registryStatus.textContent = `${TR.utils.compactNumber(state.registry?.entries?.length || 0, 0)} קטעים · ${state.activeCorpusSourceIds.size} קבצים`;
     els.minScoreInput.max = String(Math.max(100, Math.ceil(model.maxScore)));
     els.minScoreInput.value = String(Math.min(state.filters.minScore, model.maxScore));
     state.filters.minScore = Number(els.minScoreInput.value);
@@ -672,7 +866,7 @@ TR.app = (() => {
     if (!state.model) return;
     const books = state.model.books.filter(book => book.nonSelfCandidateCount > 0);
     els.bookMultiOptions.innerHTML = multiMenuHtml(
-      books.map(book => ({ value: book.slug, label: book.title, note: `${book.recordCount} קטעים` })),
+      books.map(book => ({ value: book.slug, label: book.localTitle || book.title, note: `${book.recordCount} קטעים` })),
       new Set(state.filters.bookSlugs),
       'book'
     );
@@ -829,6 +1023,8 @@ TR.app = (() => {
   function sourceBookTitle(record) {
     const metadata = sourceBookMetadata(record);
     return record?.resolvedSourceTitle
+      || record?.localMetadata?.heTitle
+      || record?.localMetadata?.title
       || metadata?.heTitle
       || metadata?.title
       || record?.sourceBook?.title
@@ -836,12 +1032,13 @@ TR.app = (() => {
   }
 
   function sourceAddress(record) {
+    const localPassageId = String(record?.localMetadata?.passageId || '').trim();
     const template = record?.refTemplate || {};
     const named = Array.isArray(template.namedPathTitles) && template.namedPathTitles.length
       ? template.namedPathTitles.join(', ')
       : String(template.namedTitle || '').trim();
     const address = String(template.address || '').trim();
-    return [named, address].filter(Boolean).join(' ');
+    return [named, address].filter(Boolean).join(' ') || localPassageId;
   }
 
   function sourceRailItemRef(record) {
@@ -922,6 +1119,16 @@ TR.app = (() => {
     return record?.candidates.find(candidate => candidate.id === state.activeCandidateId) || null;
   }
 
+  function viewAlignmentDetails(record, candidate) {
+    if (!candidate?.details) return {};
+    if (!candidate.details.__largeStoreRef) return candidate.details;
+    return {
+      ...candidate.details,
+      passage_text: record?.analysisText || record?.originalText || '',
+      source_text: candidate.sourceText || ''
+    };
+  }
+
   function renderComparison() {
     const record = activeRecord();
     const candidate = activeCandidate();
@@ -930,9 +1137,14 @@ TR.app = (() => {
     els.sourceTitle.textContent = sourceBookTitle(record);
     els.sourceRef.textContent = sourceCanonicalRef(record);
     const alignmentColor = candidate ? TR.utils.hashColor(candidate.bookSlug) : '#2f6b50';
-    els.sourceText.innerHTML = candidate
-      ? TR.utils.alignedTextHtml(candidate.details, 'original', { color: alignmentColor })
-      : TR.utils.escapeHtml(record.originalText);
+    const showOriginal = state.textMode === 'original';
+    els.textModeButtons.forEach(item => item.classList.toggle('is-active', item.dataset.textMode === state.textMode));
+    const sourcePlainText = showOriginal
+      ? (record.localMetadata?.originalText || record.originalSourceText || record.originalText)
+      : (record.localMetadata?.analysisText || record.analysisText || record.originalText);
+    els.sourceText.innerHTML = candidate && !showOriginal
+      ? TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'original', { color: alignmentColor, colorMode: state.colorMode })
+      : TR.utils.escapeHtml(sourcePlainText);
 
     if (!candidate) {
       els.candidateTitle.textContent = 'לא נבחר קטע מן הדאטהסט';
@@ -944,21 +1156,169 @@ TR.app = (() => {
       renderGenizahMetadata(null, null);
       els.alignmentNote.textContent = 'שנה את המסננים כדי להציג השוואה.';
       els.addActiveCandidateBtn.disabled = true;
+      els.alignmentInspectorBody.innerHTML = '<p class="metadata-warning">לא נבחר מועמד להצגת פרטי יישור.</p>';
       renderSynopsisIndicators();
       return;
     }
 
-    els.candidateTitle.textContent = candidate.bookTitle;
-    els.candidateRef.textContent = candidate.displayRef;
-    els.candidateText.innerHTML = TR.utils.alignedTextHtml(candidate.details, 'candidate', { color: alignmentColor });
+    els.candidateTitle.textContent = candidate.localMetadata?.heTitle || candidate.localMetadata?.title || candidate.bookTitle;
+    els.candidateRef.textContent = candidate.localMetadata?.passageId || candidate.displayRef;
+    const candidatePlainText = showOriginal
+      ? (candidate.localMetadata?.originalText || candidate.originalSourceText || candidate.sourceText)
+      : (candidate.localMetadata?.analysisText || candidate.analysisText || candidate.sourceText);
+    els.candidateText.innerHTML = showOriginal
+      ? TR.utils.escapeHtml(candidatePlainText)
+      : TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'candidate', { color: alignmentColor, colorMode: state.colorMode });
     setMetricCards(candidate);
-    els.alignmentNote.textContent = candidate.hasDetailedAlignment
-      ? 'אותו צבע מוצג בשני הטקסטים לפי רצף היישור המפורט שסיפקה מערכת TEXTREUSE.'
-      : 'סימוני ה־HTML של TEXTREUSE הועברו גם לטקסט המקור באמצעות יישור המילים, כדי להציג צבע מקביל בשני הצדדים.';
+    els.alignmentNote.textContent = showOriginal
+      ? 'מוצג הנוסח המקורי מן ה־Passage Registry. ההדגשות מוסתרות במצב זה משום שהיישור חושב על טקסט הניתוח.'
+      : candidate.hasDetailedAlignment
+        ? (state.colorMode === 'original' ? 'מוצגים צבעי TEXTREUSE המקוריים כאשר הם קיימים; זוגות יישור ללא צבע מפורש משתמשים בצבע המערכת.' : 'אותו צבע מוצג בשני הטקסטים לפי רצף היישור המפורט שסיפקה מערכת TEXTREUSE.')
+        : 'סימוני ה־HTML של TEXTREUSE הועברו גם לטקסט המקור באמצעות יישור המילים, כדי להציג צבע מקביל בשני הצדדים.';
+    renderAlignmentInspector(record, candidate);
     renderMetadataLoading(candidate);
     loadSelectedMetadata(record, candidate);
+    hydrateActiveLargeTexts(record, candidate);
     els.addActiveCandidateBtn.disabled = false;
     renderSynopsisIndicators();
+  }
+
+  function renderAlignmentInspector(record, candidate) {
+    if (!els.alignmentInspectorBody || !candidate) return;
+    const alignment = candidate.alignment || (TR.utils.normalizedAlignment ? TR.utils.normalizedAlignment(candidate.details || {}) : null) || { origin: 'none', pairs: [] };
+    const originLabels = {
+      alignment_sequence: 'alignment_sequence (ישיר)',
+      matrix: 'מטריצות יישור',
+      'html-inferred': 'שחזור מסימוני HTML',
+      none: 'ללא יישור מפורט'
+    };
+    const local = candidate.localMetadata || {};
+    const sourceLocal = record.localMetadata || {};
+    const pairRows = (alignment.pairs || []).slice(0, 80).map(pair => `
+      <tr><td>${pair.originalIndex}</td><td>${pair.candidateIndex}</td><td>${TR.utils.escapeHtml(pair.kind || 'match')}</td><td>${Number(pair.strength ?? 1).toFixed(3)}</td></tr>`).join('');
+    const pairTable = pairRows ? `
+      <table class="alignment-table"><thead><tr><th>Token מקור</th><th>Token מועמד</th><th>סוג</th><th>חוזק</th></tr></thead><tbody>${pairRows}</tbody></table>
+      ${(alignment.pairs || []).length > 80 ? `<p class="small-note">מוצגות 80 מתוך ${alignment.pairs.length} התאמות.</p>` : ''}` : '';
+    const synopsisRaw = alignment.synopsisTable != null
+      ? `<details><summary>synopsis_table הגולמי</summary><pre class="raw-data-block">${TR.utils.escapeHtml(typeof alignment.synopsisTable === 'string' ? alignment.synopsisTable : JSON.stringify(alignment.synopsisTable, null, 2))}</pre></details>`
+      : '';
+    const rawDetails = candidate.details?.__largeStoreRef
+      ? `<details><summary>Raw candidate / alignment_details</summary><p class="small-note">הקובץ נטען במצב streaming. ה-raw המלא נשמר ב-IndexedDB ואינו מוחזק בזיכרון.</p><button type="button" class="secondary-button" data-load-large-raw>טען raw מלא לפי דרישה</button></details>`
+      : `<details><summary>Raw candidate / alignment_details</summary><pre class="raw-data-block">${TR.utils.escapeHtml(JSON.stringify({ candidate: candidate.raw, alignment_details: candidate.details }, null, 2))}</pre></details>`;
+    els.alignmentInspectorBody.innerHTML = `
+      <dl class="research-details-grid">
+        <div><dt>מקור היישור</dt><dd>${TR.utils.escapeHtml(originLabels[alignment.origin] || alignment.origin)}</dd></div>
+        <div><dt>Dataset</dt><dd>${TR.utils.escapeHtml(candidate.datasetLabel || candidate.datasetId || '—')}</dd></div>
+        <div><dt>Job ID</dt><dd>${TR.utils.escapeHtml(String(record.jobId ?? '—'))}</dd></div>
+        <div><dt>Elastic / candidate ID</dt><dd>${TR.utils.escapeHtml(candidate.rawCandidateId || '—')}</dd></div>
+        <div><dt>Source Resource</dt><dd>${TR.utils.escapeHtml(sourceLocal.resourceId || record.resourceId || record.sourceBook?.slug || '—')}</dd></div>
+        <div><dt>Source Passage</dt><dd>${TR.utils.escapeHtml(sourceLocal.passageId || record.passageId || record.rawId || '—')}</dd></div>
+        <div><dt>Candidate Resource</dt><dd>${TR.utils.escapeHtml(local.resourceId || candidate.resourceId || candidate.bookSlug || '—')}</dd></div>
+        <div><dt>Candidate Passage</dt><dd>${TR.utils.escapeHtml(local.passageId || candidate.passageId || candidate.sourceLocation || '—')}</dd></div>
+        <div><dt>טווח מילים</dt><dd>${local.fromWord != null || local.toWord != null ? `${local.fromWord ?? '—'}–${local.toWord ?? '—'}` : '—'}</dd></div>
+        <div><dt>מספר זוגות ישירים</dt><dd>${(alignment.pairs || []).length}</dd></div>
+      </dl>
+      ${pairTable}
+      ${synopsisRaw}
+      ${rawDetails}`;
+  }
+
+  async function hydrateActiveLargeTexts(record, candidate) {
+    let didHydrate = false;
+    const targets = [
+      { entity: record, metadata: record?.localMetadata },
+      { entity: candidate, metadata: candidate?.localMetadata }
+    ].filter(item => item.metadata?.largeRawRef && !item.metadata.__largeTextHydrated);
+    for (const target of targets) {
+      const ref = target.metadata.largeRawRef;
+      target.metadata.__largeTextHydrated = true;
+      try {
+        const raw = await TR.largeFiles.getRecord(ref.sourceId, ref.rawId);
+        if (!raw) continue;
+        const analysis = String(raw.sentence ?? raw.analysis_text ?? raw.text ?? raw.source_text ?? raw.passage_text ?? '');
+        const original = String(raw.orig_sentence ?? raw.original_text ?? raw.original ?? analysis);
+        target.metadata.analysisText = analysis || target.metadata.analysisText;
+        target.metadata.originalText = original || target.metadata.originalText;
+        if (target.entity === record) {
+          record.analysisText = analysis || record.analysisText;
+          record.originalSourceText = original || record.originalSourceText;
+          record.originalText = analysis || record.originalText;
+          record.bookText = analysis || record.bookText;
+        } else if (target.entity === candidate) {
+          candidate.analysisText = analysis || candidate.analysisText;
+          candidate.originalSourceText = original || candidate.originalSourceText;
+          candidate.sourceText = analysis || candidate.sourceText;
+          candidate.datasetText = analysis || candidate.datasetText;
+        }
+        didHydrate = true;
+      } catch { /* raw enrichment is optional */ }
+    }
+
+    // Large TEXTREUSE datasets keep the complete raw record in IndexedDB and
+    // only a short searchable preview in RAM. Rehydrate the active comparison
+    // on demand so >1GB files do not require duplicating every source/candidate
+    // text and alignment payload in the page heap.
+    let rawReuseRecord = null;
+    if (record?.compactMode && record.largeSourceId && !record.__largeTextHydrated) {
+      record.__largeTextHydrated = true;
+      try {
+        rawReuseRecord = await TR.largeFiles.getRecord(record.largeSourceId, record.rawId);
+        const rawCandidates = Array.isArray(rawReuseRecord?.candidates) ? rawReuseRecord.candidates : [];
+        const seedDetails = rawCandidates.find(item => item?.alignment_details?.passage_text)?.alignment_details || {};
+        const analysis = String(seedDetails.passage_text || rawReuseRecord?.passage_text || record.analysisText || '');
+        const original = String(rawReuseRecord?.orig_sentence || rawReuseRecord?.original_text || analysis);
+        if (analysis) {
+          record.analysisText = analysis;
+          record.originalText = analysis;
+          record.bookText = analysis;
+          if (record.bookPassage) {
+            record.bookPassage.passageText = analysis;
+            record.bookPassage.sourceText = analysis;
+          }
+        }
+        if (original) record.originalSourceText = original;
+        if (record.localMetadata) {
+          record.localMetadata.analysisText = analysis || record.localMetadata.analysisText;
+          record.localMetadata.originalText = original || record.localMetadata.originalText;
+        }
+        didHydrate = Boolean(analysis || original);
+      } catch { /* keep compact preview */ }
+    }
+
+    if (candidate?.largeSourceId && !candidate.__largeTextHydrated) {
+      candidate.__largeTextHydrated = true;
+      try {
+        rawReuseRecord = rawReuseRecord || await TR.largeFiles.getRecord(candidate.largeSourceId, candidate.rawRecordId);
+        const rawCandidate = Array.isArray(rawReuseRecord?.candidates) ? rawReuseRecord.candidates[candidate.index] : null;
+        const details = rawCandidate?.alignment_details || {};
+        if (!candidate.__compactDetails) candidate.__compactDetails = candidate.details;
+        if (candidate.__compactSourceText == null) candidate.__compactSourceText = candidate.sourceText;
+        // Full alignment markup is loaded only for the active candidate. This
+        // keeps >1GB datasets compact while preserving exact TEXTREUSE colors.
+        candidate.details = details;
+        candidate.alignment = TR.utils.normalizedAlignment ? TR.utils.normalizedAlignment(details) : candidate.alignment;
+        const analysis = String(details.source_text || rawCandidate?.source_text || candidate.sourceText || '');
+        const original = String(details.orig_sentence || details.original_text || rawCandidate?.orig_sentence || rawCandidate?.original_text || analysis);
+        if (analysis) {
+          candidate.sourceText = analysis;
+          candidate.datasetText = analysis;
+          candidate.analysisText = analysis;
+        }
+        if (original) candidate.originalSourceText = original;
+        if (candidate.localMetadata) {
+          candidate.localMetadata.analysisText = analysis || candidate.localMetadata.analysisText;
+          candidate.localMetadata.originalText = original || candidate.localMetadata.originalText;
+        }
+        didHydrate = didHydrate || Boolean(analysis || original);
+      } catch { /* keep compact preview */ }
+    }
+
+    if (didHydrate && record?.id === state.activeRecordId) {
+      requestAnimationFrame(() => {
+        if (state.activeView === 'synopsis') renderSynopsis();
+        else if (candidate?.id === state.activeCandidateId) renderComparison();
+      });
+    }
   }
 
   function setMetricCards(candidate) {
@@ -972,12 +1332,17 @@ TR.app = (() => {
   function renderCandidateList() {
     const record = activeRecord();
     const candidates = record ? state.model.getCandidates(record.id, state.filters) : [];
+    if (state.candidateList.recordId !== record?.id) {
+      state.candidateList.recordId = record?.id || '';
+      state.candidateList.limit = state.candidateList.step;
+    }
+    const visibleCandidates = candidates.slice(0, state.candidateList.limit);
     const selected = selectedCandidatesForRecord(record?.id);
-    els.candidateListCount.textContent = `${candidates.length} קטעים`;
+    els.candidateListCount.textContent = candidates.length > visibleCandidates.length ? `${visibleCandidates.length} / ${candidates.length} קטעים` : `${candidates.length} קטעים`;
     const fragment = document.createDocumentFragment();
     if (!candidates.length) fragment.append(emptyMessage('אין קטעים מן הדאטהסט המתאימים למסננים.'));
 
-    candidates.forEach((candidate, index) => {
+    visibleCandidates.forEach((candidate, index) => {
       const row = document.createElement('div');
       row.className = `candidate-item-row ${candidate.id === state.activeCandidateId ? 'is-active' : ''}`;
 
@@ -1010,6 +1375,17 @@ TR.app = (() => {
       row.append(button);
       fragment.append(row);
     });
+    if (visibleCandidates.length < candidates.length) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'secondary-button candidate-load-more';
+      more.textContent = `הצג עוד ${Math.min(state.candidateList.step, candidates.length - visibleCandidates.length)} מתוך ${candidates.length - visibleCandidates.length} שנותרו`;
+      more.addEventListener('click', () => {
+        state.candidateList.limit += state.candidateList.step;
+        renderCandidateList();
+      });
+      fragment.append(more);
+    }
     els.candidateList.replaceChildren(fragment);
     requestAnimationFrame(() => els.candidateList.querySelector('.candidate-item.is-active')?.scrollIntoView({ block: 'nearest' }));
     renderSynopsisIndicators();
@@ -1028,6 +1404,7 @@ TR.app = (() => {
       fallbackRef: record.displayRef,
       book: state.model.bookMap.get(record.sourceBook?.slug),
       passage: original.status === 'fulfilled' ? original.value : null,
+      candidate: record.bookPassage,
       error: original.status === 'rejected' ? original.reason?.message : null
     });
     renderMetadataCard(els.candidateMetadata, {
@@ -1083,21 +1460,19 @@ TR.app = (() => {
   }
 
   async function getCandidateMetadata(candidate) {
-    if (!candidate?.isBookPassage && candidate?.isSefariaLike === false) return null;
-    const key = `${candidate.bookSlug}::${candidate.sourceLocation}`;
+    if (!candidate) return null;
+    const key = `${candidate.resourceId || candidate.bookSlug}::${candidate.passageId || candidate.sourceLocation}`;
     if (state.passageMetadata.has(key)) return state.passageMetadata.get(key);
-    const metadata = await sefaria.getPassageMetadata(candidate);
+    const metadata = await resolverHub.getPassageMetadata(candidate, { preferLocal: true });
     state.passageMetadata.set(key, metadata);
     return metadata;
   }
 
   function renderMetadataLoading(candidate) {
-    els.originalMetadata.innerHTML = metadataPlaceholder('מאתר את קטע הספר בספריא…', true);
-    if (candidate?.isSefariaLike === false) {
-      els.candidateMetadata.innerHTML = metadataPlaceholder('לקטע זה אין מקור בספריא. נטען מטה-דאטה מקומי…', true);
-      return;
-    }
-    els.candidateMetadata.innerHTML = metadataPlaceholder('מאתר את הקטע מן הדאטהסט בספריא…', true);
+    els.originalMetadata.innerHTML = metadataPlaceholder('מאחד מטא־דאטה מקומי ומקורות חיצוניים…', true);
+    els.candidateMetadata.innerHTML = metadataPlaceholder(candidate?.isSefariaLike === false
+      ? 'טוען מטא־דאטה מקומי של הקטע…'
+      : 'מאחד Passage Registry, ספריא ו־DTS כאשר הם זמינים…', true);
   }
 
   function renderGenizahMetadataLoading(candidate) {
@@ -1276,36 +1651,62 @@ TR.app = (() => {
 
   function renderMetadataCard(container, { heading, fallbackRef, book, passage, candidate, error }) {
     const metadata = book?.metadata || {};
+    const local = candidate?.localMetadata || passage?.localEntry || {};
     const authors = (metadata.authors || []).map(author => author.he || author.en).filter(Boolean).join(', ');
-    const canonicalRef = passage?.heRef || passage?.canonicalRef || fallbackRef;
-    const categories = passage?.categories?.length ? passage.categories : (metadata.categories || book?.categories || []);
-    const version = passage?.versionTitleInHebrew || passage?.versionTitle || '';
+    const canonicalRef = passage?.heRef || passage?.canonicalRef || [local.heTitle || local.title, local.passageId].filter(Boolean).join(' ') || fallbackRef;
+    const categories = passage?.categories?.length ? passage.categories : (local.categories?.length ? local.categories : (metadata.categories || book?.categories || []));
+    const version = passage?.versionTitleInHebrew || passage?.versionTitle || (Array.isArray(local.versions) ? local.versions.join(' · ') : (local.versions || ''));
+    const versionSource = passage?.versionSource || local.versionSource || '';
     const date = metadata.compDateString || formatDateRange(metadata.compDate);
     const description = metadata.heShortDesc || metadata.enShortDesc || '';
     const link = passage?.url || metadata.url || null;
     const resolutionLabel = passage?.resolution ? diagnosticMethodLabel(passage.resolution) : '';
-    const noSefariaSource = Boolean(candidate && candidate.isSefariaLike === false);
+    const sourceBadges = [];
+    if (local.location || passage?.provider?.includes('local')) sourceBadges.push('Local corpus');
+    if (passage?.externalMetadata || passage?.provider?.includes('sefaria') || metadata.url) sourceBadges.push('Sefaria');
+    if (local.dts || passage?.provider?.includes('dts')) sourceBadges.push('DTS');
+    if (candidate?.sourceFamily === 'geniza') sourceBadges.push('Genizah');
+    if (candidate?.sourceFamily === 'vrr') sourceBadges.push('VRR');
+    const wordRange = local.fromWord != null || local.toWord != null ? `${local.fromWord ?? '—'}–${local.toWord ?? '—'}` : '';
+    const provenanceLabels = [...new Set((local.provenance || []).map(item => item.label || item.sourceId).filter(Boolean))];
+    const noExternal = Boolean(candidate && candidate.isSefariaLike === false && !local.dts);
+    const advancedRows = [
+      local.resourceId ? `<div><dt>Resource ID</dt><dd>${TR.utils.escapeHtml(local.resourceId)}</dd></div>` : '',
+      local.passageId ? `<div><dt>Passage ID</dt><dd>${TR.utils.escapeHtml(local.passageId)}</dd></div>` : '',
+      local.segment != null ? `<div><dt>Segment</dt><dd>${TR.utils.escapeHtml(String(local.segment))}</dd></div>` : '',
+      wordRange ? `<div><dt>טווח מילים</dt><dd>${TR.utils.escapeHtml(wordRange)}</dd></div>` : '',
+      local.textLength != null ? `<div><dt>אורך הטקסט</dt><dd>${TR.utils.escapeHtml(String(local.textLength))}</dd></div>` : '',
+      versionSource ? `<div><dt>מקור הגרסה</dt><dd>${/^https?:\/\//i.test(versionSource) ? `<a href="${TR.utils.escapeHtml(versionSource)}" target="_blank" rel="noopener">${TR.utils.escapeHtml(versionSource)}</a>` : TR.utils.escapeHtml(versionSource)}</dd></div>` : '',
+      provenanceLabels.length ? `<div><dt>Provenance</dt><dd>${TR.utils.escapeHtml(provenanceLabels.join(' · '))}</dd></div>` : '',
+      local.references?.length ? `<div><dt>References</dt><dd>${TR.utils.escapeHtml(String(local.references.length))}</dd></div>` : ''
+    ].filter(Boolean).join('');
 
     container.innerHTML = `
       <div class="metadata-heading-row">
         <h4>${TR.utils.escapeHtml(heading)}</h4>
-        ${link ? `<a href="${TR.utils.escapeHtml(link)}" target="_blank" rel="noopener">פתיחה בספריא ↗</a>` : ''}
+        ${link ? `<a href="${TR.utils.escapeHtml(link)}" target="_blank" rel="noopener">פתיחת מקור ↗</a>` : ''}
       </div>
       <dl class="metadata-list">
         <div><dt>מראה מקום</dt><dd>${TR.utils.escapeHtml(canonicalRef)}</dd></div>
-        <div><dt>חיבור</dt><dd>${TR.utils.escapeHtml(metadata.heTitle || metadata.title || book?.title || '')}</dd></div>
+        <div><dt>חיבור</dt><dd>${TR.utils.escapeHtml(local.heTitle || metadata.heTitle || local.title || metadata.title || book?.title || '')}</dd></div>
         ${authors ? `<div><dt>מחבר</dt><dd>${TR.utils.escapeHtml(authors)}</dd></div>` : ''}
         ${date ? `<div><dt>זמן חיבור</dt><dd>${TR.utils.escapeHtml(date)}</dd></div>` : ''}
         ${metadata.compPlace ? `<div><dt>מקום חיבור</dt><dd>${TR.utils.escapeHtml(metadata.compPlace)}</dd></div>` : ''}
         ${categories.length ? `<div><dt>קטגוריות</dt><dd>${TR.utils.escapeHtml(categories.join(' › '))}</dd></div>` : ''}
-        ${version ? `<div><dt>מהדורה דיגיטלית</dt><dd>${TR.utils.escapeHtml(version)}</dd></div>` : ''}
+        ${version ? `<div><dt>גרסה ששימשה</dt><dd>${TR.utils.escapeHtml(version)}</dd></div>` : ''}
         ${passage?.license ? `<div><dt>רישיון</dt><dd>${TR.utils.escapeHtml(passage.license)}</dd></div>` : ''}
         ${resolutionLabel ? `<div><dt>פתרון ההפניה</dt><dd>${TR.utils.escapeHtml(resolutionLabel)}</dd></div>` : ''}
       </dl>
+      ${sourceBadges.length ? `<div class="metadata-source-badges">${[...new Set(sourceBadges)].map(label => `<span class="metadata-source-badge">${TR.utils.escapeHtml(label)}</span>`).join('')}</div>` : ''}
+      ${advancedRows ? `<details class="research-details"><summary>פרטי passage ו־provenance</summary><div class="research-details-body"><dl class="metadata-list">${advancedRows}</dl></div></details>` : ''}
+      ${local.originalText && local.originalText !== local.analysisText ? '<p class="small-note">נוסח מקורי זמין. ניתן לעבור אליו באמצעות המתג מעל הטקסטים.</p>' : ''}
+      ${local.references?.length ? `<details class="research-details"><summary>References (${local.references.length})</summary><div class="research-details-body"><pre class="raw-data-block">${TR.utils.escapeHtml(JSON.stringify(local.references, null, 2))}</pre></div></details>` : ''}
+      ${local.conflicts && Object.keys(local.conflicts).length ? `<details class="research-details"><summary>גרסאות metadata חלופיות</summary><div class="research-details-body"><pre class="raw-data-block">${TR.utils.escapeHtml(JSON.stringify(local.conflicts, null, 2))}</pre></div></details>` : ''}
+      ${local.raw ? `<details class="research-details"><summary>נתוני passage גולמיים</summary><div class="research-details-body"><pre class="raw-data-block">${TR.utils.escapeHtml(JSON.stringify(local.raw, null, 2))}</pre></div></details>` : ''}
       ${description ? `<p class="metadata-description">${TR.utils.escapeHtml(description)}</p>` : ''}
-        ${noSefariaSource ? '<p class="metadata-warning">לקטע זה אין מקור בספריא (זהו קטע גניזה/VRR), ולכן מוצג רק מטה-דאטה מקומי של הדאטהסט.</p>' : ''}
+      ${noExternal ? '<p class="metadata-warning">לקטע זה אין תלות בספריא; המטא־דאטה המקומי מוצג ישירות מן הקורפוס/הדאטהסט.</p>' : ''}
       ${passage?.resolutionProblem ? `<p class="metadata-warning">${TR.utils.escapeHtml(passage.resolutionProblem)}</p>` : ''}
-      ${error ? '<p class="metadata-warning">ספריא לא החזירה מטא־דאטה לקטע זה. הנתונים המקומיים עדיין מוצגים במלואם.</p>' : ''}`;
+      ${error ? '<p class="metadata-warning">המקור החיצוני לא החזיר מטא־דאטה. הנתונים המקומיים נשמרים ומוצגים.</p>' : ''}`;
   }
 
   function metadataPlaceholder(text, loading = false) {
@@ -1569,7 +1970,10 @@ TR.app = (() => {
   function renderScatter() {
     if (!state.model || state.activeView !== 'scatter') return;
     const points = state.model.getScatterPoints({ filters: state.filters });
-    els.scatterCount.textContent = t(`${points.length} נקודות מוצגות`, `${points.length} points shown`);
+    const totalPoints = Number(points.totalSeen || points.length);
+    els.scatterCount.textContent = totalPoints > points.length
+      ? t(`${points.length} מתוך ${totalPoints} נקודות מוצגות (דגימה)`, `${points.length} of ${totalPoints} points shown (sample)`)
+      : t(`${points.length} נקודות מוצגות`, `${points.length} points shown`);
     if (points.length) {
       const avgX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
       const avgY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
@@ -1609,13 +2013,14 @@ TR.app = (() => {
           <td>
             <input class="library-book-check" type="checkbox" data-library-book="${TR.utils.escapeHtml(book.slug)}" ${selectedBooks.has(book.slug) ? 'checked' : ''} aria-label="הוספה למסנן">
             <span class="book-dot" style="--book-color:${TR.utils.hashColor(book.slug)}"></span>
-            <b>${TR.utils.escapeHtml(metadata.heTitle || book.title)}</b><small>${TR.utils.escapeHtml(metadata.heTitle ? book.title : '')}</small>
+            <b>${TR.utils.escapeHtml(metadata.heTitle || book.localTitle || book.title)}</b><small>${TR.utils.escapeHtml((metadata.heTitle || book.localTitle) && book.title !== (metadata.heTitle || book.localTitle) ? book.title : '')}</small>
           </td>
           <td>${book.recordCount}</td>
           <td>${book.nonSelfCandidateCount}</td>
           <td>${TR.utils.percent(book.maxNormScore, 0)}</td>
           <td>${book.fullAlignmentCount}</td>
           <td>${TR.utils.escapeHtml(author || '—')}</td>
+          <td>${book.localResource ? '<span class="metadata-source-badge">Local</span>' : ''}${book.localResource?.dts ? '<span class="metadata-source-badge">DTS</span>' : ''}${metadata.url ? '<span class="metadata-source-badge">Sefaria</span>' : ''}</td>
           <td><span class="metadata-state state-${book.metadataStatus}">${metadataStateLabel(book.metadataStatus)}</span></td>
         </tr>`;
     }).join('');
@@ -1642,11 +2047,12 @@ TR.app = (() => {
     const metadata = book.metadata || {};
     const authors = (metadata.authors || []).map(author => author.he || author.en).filter(Boolean).join(', ');
     const description = metadata.heDesc || metadata.heShortDesc || metadata.enDesc || metadata.enShortDesc || '';
+    const localResource = book.localResource || null;
     const selected = state.filters.bookSlugs.includes(bookSlug);
     els.bookInspector.innerHTML = `
       <div class="book-inspector-head">
         <span class="book-large-dot" style="--book-color:${TR.utils.hashColor(book.slug)}"></span>
-        <div><h3>${TR.utils.escapeHtml(metadata.heTitle || book.title)}</h3><p>${TR.utils.escapeHtml(metadata.heTitle ? book.title : '')}</p></div>
+        <div><h3>${TR.utils.escapeHtml(metadata.heTitle || book.localTitle || book.title)}</h3><p>${TR.utils.escapeHtml((metadata.heTitle || book.localTitle) && book.title !== (metadata.heTitle || book.localTitle) ? book.title : '')}</p></div>
       </div>
       <dl class="metadata-list">
         ${authors ? `<div><dt>מחבר</dt><dd>${TR.utils.escapeHtml(authors)}</dd></div>` : ''}
@@ -1656,8 +2062,12 @@ TR.app = (() => {
         <div><dt>מועמדים</dt><dd>${book.nonSelfCandidateCount}</dd></div>
         <div><dt>ציון מנורמל מרבי</dt><dd>${TR.utils.percent(book.maxNormScore, 1)}</dd></div>
         <div><dt>התאמות מלאות</dt><dd>${book.fullAlignmentCount}</dd></div>
+        ${localResource ? `<div><dt>Resource ID</dt><dd>${TR.utils.escapeHtml(localResource.id)}</dd></div><div><dt>קטעים ב־Registry</dt><dd>${localResource.passageCount}</dd></div>` : ''}
+        ${localResource?.versions?.length ? `<div><dt>גרסאות מקומיות</dt><dd>${TR.utils.escapeHtml(localResource.versions.join(' · '))}</dd></div>` : ''}
+        ${localResource?.versionSources?.length ? `<div><dt>מקורות גרסה</dt><dd>${localResource.versionSources.map(url => /^https?:\/\//i.test(url) ? `<a href="${TR.utils.escapeHtml(url)}" target="_blank" rel="noopener">מקור ↗</a>` : TR.utils.escapeHtml(url)).join(' · ')}</dd></div>` : ''}
       </dl>
-      ${description ? `<p class="book-description">${TR.utils.escapeHtml(description)}</p>` : '<p class="metadata-warning">המטא־דאטה המורחב עדיין לא זמין.</p>'}
+      ${description ? `<p class="book-description">${TR.utils.escapeHtml(description)}</p>` : (localResource ? '<p class="small-note">מטא־דאטה מקומי זמין גם ללא ספריא.</p>' : '<p class="metadata-warning">המטא־דאטה המורחב עדיין לא זמין.</p>')}
+      <div class="metadata-source-badges">${localResource ? '<span class="metadata-source-badge">Local corpus</span>' : ''}${localResource?.dts ? '<span class="metadata-source-badge">DTS</span>' : ''}${metadata.url ? '<span class="metadata-source-badge">Sefaria</span>' : ''}</div>
       <div class="inspector-actions">
         <button type="button" class="primary-button" data-toggle-book>${selected ? 'הסר מהמסנן' : 'הוסף למסנן המרובה'}</button>
         <button type="button" class="secondary-button" data-book-synopsis>הוסף קטעים מן הספר בדאטהסט לסינופסיס</button>
@@ -1975,7 +2385,10 @@ TR.app = (() => {
         ? smartCandidatesForRecord(record, 'manual', state.synopsis.topCount)
         : smartCandidatesForRecord(record, strategy, state.synopsis.topCount);
       if (!candidates.length && state.synopsis.strategy === 'manual') candidates = smartCandidatesForRecord(record, 'recommended', state.synopsis.topCount);
-      const sourceHtml = buildUnionSourceHtml(record, candidates);
+      if (record.compactMode) candidates.slice(0, 12).forEach(candidate => hydrateActiveLargeTexts(record, candidate));
+      const sourceHtml = state.textMode === 'original'
+        ? TR.utils.escapeHtml(record.localMetadata?.originalText || record.originalSourceText || record.originalText)
+        : buildUnionSourceHtml(record, candidates);
       const candidateColumns = candidates.map(candidate => continuousColumnHtml(record, candidate)).join('');
       return `<article class="continuous-passage ${record.id === state.activeRecordId ? 'is-active' : ''}" data-continuous-record="${TR.utils.escapeHtml(record.id)}">
         <header class="continuous-passage-head">
@@ -1989,7 +2402,7 @@ TR.app = (() => {
           <article class="continuous-column continuous-source-column">
             <header class="continuous-column-head"><span>ספר המקור</span><h4>${TR.utils.escapeHtml(sourceBookTitle(record))}</h4><p>${TR.utils.escapeHtml(sourceCanonicalRef(record))}</p></header>
             <div class="continuous-column-text">${sourceHtml}</div>
-            <footer class="continuous-column-foot">מול ${candidates.length} מועמדים שנבחרו עבור קטע זה</footer>
+            <footer class="continuous-column-foot">${TR.utils.escapeHtml(record.localMetadata?.versions ? `גרסה: ${[record.localMetadata.versions].flat().join(' · ')} · ` : '')}מול ${candidates.length} מועמדים שנבחרו עבור קטע זה</footer>
           </article>
           ${candidateColumns || '<article class="continuous-column"><header class="continuous-column-head"><span>הדאטהסט</span><h4>אין מועמדים</h4></header><div class="continuous-column-text"><p class="empty-inline">אין מועמדים המתאימים למסננים.</p></div><footer class="continuous-column-foot"></footer></article>'}
         </div>
@@ -2009,10 +2422,15 @@ TR.app = (() => {
 
   function continuousColumnHtml(record, candidate) {
     const color = TR.utils.hashColor(candidate.bookSlug);
+    const local = candidate.localMetadata || {};
+    const textHtml = state.textMode === 'original'
+      ? TR.utils.escapeHtml(local.originalText || candidate.originalSourceText || candidate.sourceText)
+      : TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'candidate', { color, colorMode: state.colorMode });
+    const version = Array.isArray(local.versions) ? local.versions.join(' · ') : (local.versions || '');
     return `<article class="continuous-column continuous-candidate-column" style="--column-color:${color}">
-      <header class="continuous-column-head"><span>מועמד מן הדאטהסט</span><h4>${TR.utils.escapeHtml(candidate.bookTitle)}</h4><p>${TR.utils.escapeHtml(candidate.displayRef)}</p></header>
-      <div class="continuous-column-text">${TR.utils.alignedTextHtml(candidate.details, 'candidate', { color })}</div>
-      <footer class="continuous-column-foot">${TR.utils.percent(candidate.normScore, 1)} · יישור ${TR.utils.percent(candidate.alignmentScore, 1)} · score ${TR.utils.compactNumber(candidate.score, 0)}</footer>
+      <header class="continuous-column-head"><span>מועמד מן הדאטהסט</span><h4>${TR.utils.escapeHtml(local.heTitle || local.title || candidate.bookTitle)}</h4><p>${TR.utils.escapeHtml(local.passageId || candidate.displayRef)}</p></header>
+      <div class="continuous-column-text">${textHtml}</div>
+      <footer class="continuous-column-foot">${version ? `${TR.utils.escapeHtml(version)} · ` : ''}${TR.utils.percent(candidate.normScore, 1)} · יישור ${TR.utils.percent(candidate.alignmentScore, 1)} · score ${TR.utils.compactNumber(candidate.score, 0)}</footer>
     </article>`;
   }
 
@@ -2117,6 +2535,7 @@ TR.app = (() => {
       ...visibleOrder.filter(candidate => selectedIds.has(candidate.id)),
       ...record.candidates.filter(candidate => selectedIds.has(candidate.id) && !visibleIds.has(candidate.id))
     ];
+    if (record.compactMode) order.slice(0, 24).forEach(candidate => hydrateActiveLargeTexts(record, candidate));
     els.synopsisStageTitle.textContent = `${sourceCanonicalRef(record)} · מול ${order.length} מועמדים מן הדאטהסט`;
     els.synopsisStageNote.textContent = 'מימין מופיע קטע אחד מספר המקור. כל טור שמשמאלו הוא מועמד שנבחר עבור אותו קטע מתוך הדאטהסט בלבד.';
     if (!order.length) {
@@ -2128,7 +2547,9 @@ TR.app = (() => {
       kind: 'source',
       title: sourceBookTitle(record),
       ref: sourceCanonicalRef(record),
-      textHtml: buildUnionSourceHtml(record, order),
+      textHtml: state.textMode === 'original'
+        ? TR.utils.escapeHtml(record.localMetadata?.originalText || record.originalSourceText || record.originalText)
+        : buildUnionSourceHtml(record, order),
       meta: `${order.length} קטעים מן הדאטהסט נבחרו`,
       recordId: record.id
     });
@@ -2136,9 +2557,11 @@ TR.app = (() => {
       const color = TR.utils.hashColor(candidate.bookSlug);
       return synopsisColumnHtml({
         kind: 'candidate',
-        title: candidate.bookTitle,
-        ref: candidate.displayRef,
-        textHtml: TR.utils.alignedTextHtml(candidate.details, 'candidate', { color }),
+        title: candidate.localMetadata?.heTitle || candidate.localMetadata?.title || candidate.bookTitle,
+        ref: candidate.localMetadata?.passageId || candidate.displayRef,
+        textHtml: state.textMode === 'original'
+          ? TR.utils.escapeHtml(candidate.localMetadata?.originalText || candidate.originalSourceText || candidate.sourceText)
+          : TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'candidate', { color, colorMode: state.colorMode }),
         meta: `ציון ${TR.utils.percent(candidate.normScore, 1)} · יישור ${TR.utils.percent(candidate.alignmentScore, 1)} · score ${TR.utils.compactNumber(candidate.score, 0)}`,
         candidateId: candidate.id,
         recordId: record.id,
@@ -2174,7 +2597,7 @@ TR.app = (() => {
           </div>
         </header>
         <div class="synopsis-text-scroll"><div class="synopsis-text aligned-text">${textHtml}</div></div>
-        <footer class="synopsis-column-metadata" data-synopsis-meta="${TR.utils.escapeHtml(key)}"><span class="mini-spinner"></span> מאתר מראה מקום בספריא…</footer>
+        <footer class="synopsis-column-metadata" data-synopsis-meta="${TR.utils.escapeHtml(key)}"><span class="mini-spinner"></span> מאחד מטא־דאטה…</footer>
       </article>`;
   }
 
@@ -2187,36 +2610,47 @@ TR.app = (() => {
   }
 
   function buildUnionSourceHtml(record, candidates) {
-    const tokens = String(record.originalText || '').trim().split(/\s+/).filter(Boolean);
+    const tokens = String(record.analysisText || record.originalText || '').trim().split(/\s+/).filter(Boolean);
     if (!tokens.length) return '';
     const matchesByToken = Array.from({ length: tokens.length }, () => new Map());
     candidates.forEach(candidate => {
-      const color = TR.utils.hashColor(candidate.bookSlug);
-      const matches = TR.utils.alignmentIndexMap(candidate.details, 'original');
+      const systemColor = TR.utils.hashColor(candidate.bookSlug);
+      const matches = TR.utils.alignmentIndexMap(viewAlignmentDetails(record, candidate), 'original');
       for (const [index, match] of matches.entries()) {
         if (index < 0 || index >= tokens.length) continue;
-        const existing = matchesByToken[index].get(color) || { count: 0, strength: 0, labels: new Set() };
+        const originalMode = state.colorMode === 'original';
+        const textColor = originalMode ? (match.color || '') : '';
+        const backgroundColor = originalMode ? (match.backgroundColor || '') : '';
+        const visualColor = backgroundColor || textColor || systemColor;
+        const key = `${visualColor}::${textColor}::${backgroundColor}`;
+        const existing = matchesByToken[index].get(key) || { count: 0, strength: 0, labels: new Set(), visualColor, textColor, backgroundColor, originalMode };
         existing.count += 1;
         existing.strength = Math.max(existing.strength, match.strength || 1);
         existing.labels.add(candidate.bookTitle);
-        matchesByToken[index].set(color, existing);
+        matchesByToken[index].set(key, existing);
       }
     });
 
     return tokens.map((token, index) => {
-      const entries = [...matchesByToken[index].entries()];
+      const entries = [...matchesByToken[index].values()];
       if (!entries.length) return `<span class="synopsis-token alignment-plain-token">${TR.utils.escapeHtml(token)}</span>`;
-      const labels = [...new Set(entries.flatMap(([, entry]) => [...entry.labels]))];
+      const labels = [...new Set(entries.flatMap(entry => [...entry.labels]))];
       if (entries.length === 1) {
-        const [color, entry] = entries[0];
+        const entry = entries[0];
+        if (entry.originalMode && (entry.textColor || entry.backgroundColor)) {
+          const textStyle = entry.textColor ? `--original-text-color:${TR.utils.escapeHtml(entry.textColor)};` : '';
+          const backgroundStyle = entry.backgroundColor ? `--original-bg-color:${TR.utils.escapeHtml(entry.backgroundColor)};` : '--original-bg-color:transparent;';
+          return `<span class="synopsis-token union-match original-source-color" style="${textStyle}${backgroundStyle}" title="מיושר אל ${TR.utils.escapeHtml(labels.join(', '))}">${TR.utils.escapeHtml(token)}</span>`;
+        }
         const opacity = `${Math.round((0.16 + entry.strength * 0.22) * 100)}%`;
-        return `<span class="synopsis-token union-match" style="--match-color:${color};--match-opacity:${opacity}" title="מיושר אל ${TR.utils.escapeHtml(labels.join(', '))}">${TR.utils.escapeHtml(token)}</span>`;
+        return `<span class="synopsis-token union-match" style="--match-color:${TR.utils.escapeHtml(entry.visualColor)};--match-opacity:${opacity}" title="מיושר אל ${TR.utils.escapeHtml(labels.join(', '))}">${TR.utils.escapeHtml(token)}</span>`;
       }
       const stops = [];
-      entries.forEach(([color], position) => {
+      entries.forEach((entry, position) => {
         const start = (position / entries.length) * 100;
         const finish = ((position + 1) / entries.length) * 100;
-        const rgba = hexToRgba(color, 0.32);
+        const color = TR.utils.escapeHtml(entry.visualColor);
+        const rgba = /^#[0-9a-f]{3,6}$/i.test(entry.visualColor) ? hexToRgba(entry.visualColor, 0.32) : `color-mix(in srgb, ${color} 32%, transparent)`;
         stops.push(`${rgba} ${start.toFixed(1)}%`, `${rgba} ${finish.toFixed(1)}%`);
       });
       return `<span class="synopsis-token union-match multi-match" style="background:linear-gradient(90deg,${stops.join(',')})" title="מיושר אל ${TR.utils.escapeHtml(labels.join(', '))}">${TR.utils.escapeHtml(token)}</span>`;
@@ -2274,10 +2708,14 @@ TR.app = (() => {
   }
 
   function synopsisMetadataHtml(metadata, candidate) {
-    const ref = metadata?.heRef || metadata?.canonicalRef || candidate.displayRef;
+    const local = candidate?.localMetadata || metadata?.localEntry || {};
+    const ref = metadata?.heRef || metadata?.canonicalRef || [local.heTitle || local.title, local.passageId].filter(Boolean).join(' ') || candidate.displayRef;
     const method = diagnosticMethodLabel(metadata?.resolution);
+    const version = metadata?.versionTitle || (Array.isArray(local.versions) ? local.versions.join(' · ') : (local.versions || ''));
+    const source = metadata?.provider || (local.location ? 'local' : '');
     const warning = metadata?.resolutionProblem ? `<span class="synopsis-meta-warning">${TR.utils.escapeHtml(metadata.resolutionProblem)}</span>` : '';
-    return `<span><b>${TR.utils.escapeHtml(ref)}</b><small>${TR.utils.escapeHtml(method)}</small>${warning}</span>${metadata?.url ? `<a href="${TR.utils.escapeHtml(metadata.url)}" target="_blank" rel="noopener">ספריא ↗</a>` : ''}`;
+    const linkLabel = metadata?.provider === 'dts' ? 'DTS ↗' : metadata?.url ? 'מקור ↗' : '';
+    return `<span><b>${TR.utils.escapeHtml(ref)}</b><small>${TR.utils.escapeHtml([version, method, source].filter(Boolean).join(' · '))}</small>${warning}</span>${metadata?.url ? `<a href="${TR.utils.escapeHtml(metadata.url)}" target="_blank" rel="noopener">${TR.utils.escapeHtml(linkLabel)}</a>` : ''}`;
   }
 
   function handleSynopsisGridClick(event) {
@@ -2364,6 +2802,7 @@ TR.app = (() => {
       ...visibleOrder.filter(candidate => selectedIds.has(candidate.id)),
       ...record.candidates.filter(candidate => selectedIds.has(candidate.id) && !visibleIds.has(candidate.id))
     ];
+    if (record.compactMode) order.slice(0, 24).forEach(candidate => hydrateActiveLargeTexts(record, candidate));
     if (order.length) return order;
     if (state.synopsis.strategy === 'manual') return [];
     return smartCandidatesForRecord(record, state.synopsis.strategy, state.synopsis.topCount);
@@ -2416,17 +2855,23 @@ TR.app = (() => {
       : '<div><span>מבנה מקומי</span><strong>תקין</strong></div>';
     const resolved = state.diagnostics.results.filter(result => result.ok).length;
     const failed = state.diagnostics.results.filter(result => !result.ok).length;
+    const sourceRegistryCoverage = state.model.records.filter(record => state.registry?.lookup(record)).length;
+    const candidateRegistryCoverage = state.model.records.reduce((count, record) => count + record.candidates.filter(candidate => state.registry?.lookup(candidate)).length, 0);
+    const directAlignments = state.model.records.reduce((count, record) => count + record.candidates.filter(candidate => candidate.alignment?.direct).length, 0);
     els.diagnosticSummary.innerHTML = `
       <div><span>מועמדים</span><strong>${TR.utils.compactNumber(state.model.candidateCount, 0)}</strong></div>
       <div><span>${TR.utils.escapeHtml(t('מצב בדיקה', 'Diagnostics mode'))}</span><strong>${TR.utils.escapeHtml(diagnosticsModeLabel)}</strong></div>
       <div><span>הערות מבניות</span><strong>${TR.utils.compactNumber(issues.total, 0)}</strong></div>
+      <div><span>כיסוי Registry — מקור</span><strong>${sourceRegistryCoverage}/${state.model.records.length}</strong></div>
+      <div><span>כיסוי Registry — מועמדים</span><strong>${candidateRegistryCoverage}/${state.model.candidateCount}</strong></div>
+      <div><span>יישורים ישירים</span><strong>${TR.utils.compactNumber(directAlignments, 0)}</strong></div>
       ${issueCards}
       ${state.diagnostics.results.length ? `<div><span>דגימות שנפתרו</span><strong>${resolved}/${state.diagnostics.results.length}</strong></div><div><span>דגימות שלא נפתרו</span><strong>${failed}</strong></div>` : ''}`;
 
     if (!state.diagnostics.results.length) {
       const structuralRows = issues.byDataset.map(dataset => `
-        <tr><td>${TR.utils.escapeHtml(dataset.label)}</td><td>${dataset.candidates} מועמדים עם הערות מבניות</td><td>תבנית היררכית v3</td><td><span class="diagnostic-state ${dataset.issueCount ? 'is-warning' : 'is-ok'}">${dataset.issueCount ? `${dataset.issueCount} הערות` : 'תקין'}</span></td><td>בדיקה מקומית</td><td>${TR.utils.escapeHtml(dataset.codes.map(item => `${issueLabel(item.code)}: ${item.count}`).join(' · '))}</td></tr>`).join('');
-      els.diagnosticTableBody.innerHTML = structuralRows || '<tr><td colspan="6" class="empty-table">לא נמצאו בעיות מבניות. לחץ על הבדיקה כדי לאמת דגימות מול ספריא.</td></tr>';
+        <tr><td>${TR.utils.escapeHtml(dataset.label)}</td><td>${dataset.candidates} מועמדים עם הערות מבניות</td><td>תבנית היררכית v3</td><td>${state.registry?.entries?.length ? `${state.registry.entries.length} קטעים ב־Registry` : 'ללא Registry'}</td><td><span class="diagnostic-state ${dataset.issueCount ? 'is-warning' : 'is-ok'}">${dataset.issueCount ? `${dataset.issueCount} הערות` : 'תקין'}</span></td><td>בדיקה מקומית</td><td>${TR.utils.escapeHtml(dataset.codes.map(item => `${issueLabel(item.code)}: ${item.count}`).join(' · '))}</td></tr>`).join('');
+      els.diagnosticTableBody.innerHTML = structuralRows || '<tr><td colspan="7" class="empty-table">לא נמצאו בעיות מבניות. לחץ על הבדיקה כדי לאמת גם resolvers ומקורות חיצוניים.</td></tr>';
       return;
     }
 
@@ -2438,11 +2883,53 @@ TR.app = (() => {
         <td>${TR.utils.escapeHtml(candidate.datasetLabel)}</td>
         <td><b>${TR.utils.escapeHtml(candidate.bookTitle)}</b><small>${TR.utils.escapeHtml(candidate.sourceLocation)}</small></td>
         <td>${TR.utils.escapeHtml(template)}</td>
-        <td>${result.ok ? `<a href="${TR.utils.escapeHtml(result.url)}" target="_blank" rel="noopener">${TR.utils.escapeHtml(result.ref)} ↗</a>` : '<span class="diagnostic-state is-error">לא נפתר</span>'}</td>
+        <td>${result.localFound ? `<span class="diagnostic-state is-ok">Registry</span><small>${TR.utils.escapeHtml(result.localRef || '')}</small>` : '<span class="diagnostic-state is-warning">לא נמצא</span>'}</td>
+        <td>${result.ok ? (result.url ? `<a href="${TR.utils.escapeHtml(result.url)}" target="_blank" rel="noopener">${TR.utils.escapeHtml(result.ref || 'נפתר')} ↗</a>` : `<span class="diagnostic-state is-ok">${TR.utils.escapeHtml(result.ref || 'נפתר')}</span>`) : '<span class="diagnostic-state is-error">לא נפתר</span>'}</td>
         <td>${TR.utils.escapeHtml(diagnosticMethodLabel(result.resolution))}</td>
         <td>${TR.utils.escapeHtml(issueText || 'התבנית זוהתה ואומתה.')}</td>
       </tr>`;
     }).join('');
+  }
+
+  async function diagnoseCandidateUniversal(candidate) {
+    const local = state.registry?.lookup(candidate) || candidate.localMetadata || null;
+    const localRef = local ? [local.heTitle || local.title || local.resourceId, local.passageId].filter(Boolean).join(' ') : '';
+    if (candidate.isSefariaLike) {
+      const result = await sefaria.diagnoseCandidate(candidate);
+      return { ...result, localFound: Boolean(local), localRef };
+    }
+    if (local?.dts?.endpoint && local?.dts?.resource) {
+      try {
+        const resolved = await resolverHub.dts.resolve(candidate);
+        return {
+          candidate,
+          ok: Boolean(resolved),
+          ref: resolved?.canonicalRef || localRef,
+          url: resolved?.url || '',
+          resolution: 'dts',
+          localFound: Boolean(local),
+          localRef,
+          parsed: candidate.refTemplate || {},
+          structuralIssues: [],
+          problem: resolved ? '' : 'DTS לא נפתר.'
+        };
+      } catch (error) {
+        return { candidate, ok: Boolean(local), ref: localRef, url: '', resolution: local ? 'local-registry' : 'unresolved', localFound: Boolean(local), localRef, parsed: candidate.refTemplate || {}, structuralIssues: [], problem: error.message };
+      }
+    }
+    const specialized = candidate.sourceFamily === 'geniza' ? 'genizah-local' : candidate.sourceFamily === 'vrr' ? 'vrr-local' : 'local-registry';
+    return {
+      candidate,
+      ok: Boolean(local || candidate.sourceFamily === 'geniza' || candidate.sourceFamily === 'vrr'),
+      ref: localRef || candidate.displayRef || candidate.sourceLocation,
+      url: local?.versionSource || '',
+      resolution: specialized,
+      localFound: Boolean(local),
+      localRef,
+      parsed: candidate.refTemplate || {},
+      structuralIssues: [],
+      problem: local ? '' : (candidate.sourceFamily === 'geniza' || candidate.sourceFamily === 'vrr' ? 'נפתר באמצעות resolver ייעודי; לא נמצא Passage Registry תואם.' : 'לא נמצא resolver מקומי או חיצוני.')
+    };
   }
 
   async function runDiagnostics() {
@@ -2484,7 +2971,7 @@ TR.app = (() => {
       while (queue.length) {
         const candidate = queue.shift();
         if (!candidate) break;
-        const result = await sefaria.diagnoseCandidate(candidate);
+        const result = await diagnoseCandidateUniversal(candidate);
         state.diagnostics.results.push(result);
         complete += 1;
         els.runDiagnosticsBtn.textContent = `בודק ${complete}/${samples.length}`;
@@ -2525,7 +3012,11 @@ TR.app = (() => {
       'autocomplete': 'השלמה של ספריא',
       'unresolved': 'לא נפתר',
       'network-error': 'שגיאת רשת',
-      'search': 'חיפוש בלבד'
+      'search': 'חיפוש בלבד',
+      'local-registry': 'Passage Registry מקומי',
+      'dts': 'DTS',
+      'genizah-local': 'Genizah resolver',
+      'vrr-local': 'VRR resolver'
     })[method] || method || 'ממתין';
   }
 
@@ -2563,7 +3054,21 @@ TR.app = (() => {
     if (rerender) renderAll();
   }
 
+  function releaseLargeCandidatePayload(candidate) {
+    if (!candidate?.largeSourceId || !candidate.__compactDetails) return;
+    candidate.details = candidate.__compactDetails;
+    candidate.alignment = candidate.details?.__normalizedAlignment || candidate.alignment;
+    if (candidate.__compactSourceText != null) {
+      candidate.sourceText = candidate.__compactSourceText;
+      candidate.datasetText = candidate.__compactSourceText;
+      candidate.analysisText = candidate.__compactSourceText;
+    }
+    candidate.__largeTextHydrated = false;
+  }
+
   function selectCandidate(candidateId) {
+    const previous = activeCandidate();
+    if (previous && previous.id !== candidateId) releaseLargeCandidatePayload(previous);
     state.activeCandidateId = candidateId;
     renderComparison();
     renderCandidateList();
@@ -2596,6 +3101,7 @@ TR.app = (() => {
   function updateAfterFilters(resetCandidate = true) {
     if (!state.model) return;
     if (resetCandidate) state.activeCandidateId = null;
+    state.candidateList.limit = state.candidateList.step;
     renderAll();
   }
 
@@ -2636,6 +3142,8 @@ TR.app = (() => {
     els.reverseDatasetModeSelect.value = state.reverse.mode;
     els.reverseOrderSelect.value = state.reverse.orderBy;
     els.reverseTopInput.value = String(state.reverse.topCount);
+    els.textModeButtons?.forEach(item => item.classList.toggle('is-active', item.dataset.textMode === state.textMode));
+    els.colorModeButtons?.forEach(item => item.classList.toggle('is-active', item.dataset.colorMode === state.colorMode));
     if (state.model) {
       updateDatasetSummary();
       updateBookSummary();
@@ -2692,7 +3200,9 @@ TR.app = (() => {
           orderBy: state.reverse.orderBy,
           sequenceLocked: state.reverse.sequenceLocked
         },
-        activeView: state.activeView
+        activeView: state.activeView,
+        textMode: state.textMode,
+        colorMode: state.colorMode
       }));
     } catch { /* Ignore storage errors. */ }
   }
@@ -2721,6 +3231,8 @@ TR.app = (() => {
         state.diagnostics = { ...state.diagnostics, ...saved.diagnostics };
         if (!['all', 'sefariaOnly', 'nonSefariaOnly'].includes(state.diagnostics.mode)) state.diagnostics.mode = 'all';
       }
+      if (saved.textMode) state.textMode = saved.textMode === 'original' ? 'original' : 'analysis';
+      if (saved.colorMode) state.colorMode = saved.colorMode === 'original' ? 'original' : 'system';
       if (saved.reverse) {
         state.reverse = { ...state.reverse, ...saved.reverse };
         if (!['book', 'genizaAll', 'genizaFragment', 'vrrManuscript'].includes(state.reverse.mode)) state.reverse.mode = 'book';

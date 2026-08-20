@@ -1,0 +1,9 @@
+TextReuse viewer - fast large-file + exact-color build
+Features include:
+- All original viewer tabs/functions retained
+- Research Lab tab removed
+- Passage/Resource registry and local/Sefaria/Genizah/VRR/DTS-aware resolvers
+- JSON/JSONL/NDJSON support
+- Fast large-file path: 256MB threshold, adaptive ~4MB/64-record batches, throttled progress events, lazy alignment construction, asynchronous IndexedDB raw caching with bounded backpressure, compact active model, server-side streaming
+- Exact TEXTREUSE color mode on the main reading view: sanitized original aligned HTML is rendered directly, without token-color inference
+- Original system-color mode retained

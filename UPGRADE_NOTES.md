@@ -31,3 +31,17 @@ Continuous mode renders a vertical sequence of source-book passages. Each row ke
 - Arrow Up / Page Up: previous source passage in synopsis.
 - Arrow Down / Page Down: next source passage in synopsis.
 - Continuous mode can advance in batches and open any row as a single synopsis or in the reading view.
+
+## Passage Registry / mixed-source upgrade
+
+No migration is required for existing TEXTREUSE JSON files.
+
+Optional upgrades for new corpora/results:
+
+- Add `resource_id` and `passage_id` when a stable identifier exists; otherwise `location` continues to work.
+- Add `orig_sentence` when the algorithm used a normalized `sentence` but the diplomatic/original text should be inspectable.
+- Add `versions` and `versionSource` to document the exact text used for computation.
+- Add `source_family` / `provider` / `source_type` (`local`, `custom`, `dts`, `geniza`, `vrr`) when the source should not be treated as Sefaria-like.
+- Add DTS information only when an endpoint exists. DTS is never required to open the viewer.
+
+The server now discovers `.json`, `.jsonl`, and `.ndjson` files. Multiple TEXTREUSE and corpus files may be selected together; only TEXTREUSE files contribute candidate relations, while corpus files populate the Passage Registry.

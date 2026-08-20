@@ -65,11 +65,13 @@ TR.visualizations = (() => {
         button.title = [
           row.label,
           cell.book.title,
+          cell.book.resourceId && cell.book.resourceId !== cell.book.slug ? `Resource: ${cell.book.resourceId}` : '',
+          cell.book.localResource?.versions?.length ? `גרסאות: ${cell.book.localResource.versions.join(' · ')}` : '',
           `ערך: ${formatHeatValue(cell.value, matrix.metric)}`,
           `מועמדים: ${cell.stats.count}`,
           `ציון מנורמל מרבי: ${TR.utils.percent(cell.stats.maxNorm, 1)}`,
           `התאמות מלאות: ${cell.stats.exact}`
-        ].join('\n');
+        ].filter(Boolean).join('\n');
         button.addEventListener('click', () => onCellClick({ row, book: cell.book, cell }));
         grid.append(button);
       });
@@ -216,7 +218,15 @@ TR.visualizations = (() => {
       });
       label.textContent = truncate(node.title, 24);
       const title = svgElement('title');
-      title.textContent = `${node.title}\nמופיע ב־${node.count} קטעים`;
+      const authors = (node.book?.metadata?.authors || []).map(author => author.he || author.en).filter(Boolean).join(', ');
+      title.textContent = [
+        node.title,
+        node.resourceId && node.resourceId !== node.id ? `Resource: ${node.resourceId}` : '',
+        node.book?.localResource?.categories?.length ? node.book.localResource.categories.join(' › ') : '',
+        authors ? `מחבר: ${authors}` : '',
+        node.book?.metadata?.compDateString ? `זמן: ${node.book.metadata.compDateString}` : '',
+        `מופיע ב־${node.count} קטעים`
+      ].filter(Boolean).join('\n');
       group.append(circle, label, title);
       group.addEventListener('click', () => onNodeClick(node));
       group.addEventListener('keydown', event => {
@@ -308,12 +318,14 @@ TR.visualizations = (() => {
       });
       const title = svgElement('title');
       title.textContent = [
-        point.candidate.bookTitle,
-        point.record.displayRef,
+        point.candidate.localTitle || point.candidate.bookTitle,
+        point.candidate.resourceId ? `Resource: ${point.candidate.resourceId}` : '',
+        point.candidate.passageId ? `Passage: ${point.candidate.passageId}` : '',
+        point.record.localMetadata?.passageId || point.record.displayRef,
         `ציון מנורמל: ${TR.utils.percent(point.candidate.normScore, 1)}`,
         `ציון יישור: ${TR.utils.percent(point.candidate.alignmentScore, 1)}`,
         `score: ${TR.utils.compactNumber(point.candidate.score)}`
-      ].join('\n');
+      ].filter(Boolean).join('\n');
       circle.append(title);
       circle.addEventListener('click', () => onPointClick(point));
       pointsLayer.append(circle);
