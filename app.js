@@ -25,6 +25,7 @@ TR.app = (() => {
       categories: []
     },
     matrix: { metric: 'maxNorm', granularity: 'chapter', books: 14 },
+    dominance: { metric: 'normScore', aggregation: 'max', hiddenBookSlugs: [], selectionInitialized: false, normalizeDisplay: true, showTrend: true },
     network: { minNorm: 0.1, mode: 'cooccurrence', selected: null },
     passageMetadata: new Map(),
     metadataRequestId: 0,
@@ -99,6 +100,8 @@ TR.app = (() => {
       'candidateList', 'candidateListCount', 'prevRecordBtn', 'nextRecordBtn', 'prevCandidateBtn',
       'nextCandidateBtn', 'originalMetadata', 'candidateMetadata', 'alignmentNote', 'matrixMetricSelect',
       'matrixGranularitySelect', 'matrixBooksInput', 'matrixBooksValue', 'heatmapContainer',
+      'dominanceMetricSelect', 'dominanceAggregationSelect', 'dominanceNormalizeInput', 'dominanceTrendInput', 'dominanceVisibleCount', 'dominanceTopBtn', 'dominanceAllBtn', 'dominanceNoneBtn',
+      'dominanceSourceList', 'dominanceHoverInfo', 'dominanceSvg',
       'networkThresholdInput', 'networkThresholdValue', 'networkModeSelect', 'networkSvg', 'networkInspector',
       'scatterSvg', 'scatterCount', 'libraryTableBody', 'bookInspector', 'toast', 'retryMetadataBtn',
       'activeFilterSummary', 'loadingDismissBtn', 'sourceDialog', 'sourcePickerList', 'sourcePickerNote',
@@ -345,6 +348,59 @@ TR.app = (() => {
       state.matrix.books = Number(els.matrixBooksInput.value);
       els.matrixBooksValue.textContent = state.matrix.books;
       renderMatrix();
+    });
+    els.dominanceMetricSelect.addEventListener('change', () => {
+      state.dominance.metric = els.dominanceMetricSelect.value;
+      renderDominance();
+      savePreferences();
+    });
+    els.dominanceAggregationSelect.addEventListener('change', () => {
+      state.dominance.aggregation = els.dominanceAggregationSelect.value;
+      renderDominance();
+      savePreferences();
+    });
+    els.dominanceNormalizeInput.addEventListener('change', () => {
+      state.dominance.normalizeDisplay = els.dominanceNormalizeInput.checked;
+      renderDominance();
+      savePreferences();
+    });
+    els.dominanceTrendInput.addEventListener('change', () => {
+      state.dominance.showTrend = els.dominanceTrendInput.checked;
+      renderDominance();
+      savePreferences();
+    });
+    els.dominanceTopBtn.addEventListener('click', () => {
+      if (!state.model) return;
+      const data = state.model.aggregateDominance({ metric: state.dominance.metric, aggregation: state.dominance.aggregation, filters: state.filters });
+      state.dominance.hiddenBookSlugs = data.books.slice(5).map(book => book.slug);
+      state.dominance.selectionInitialized = true;
+      renderDominance();
+      savePreferences();
+    });
+    els.dominanceAllBtn.addEventListener('click', () => {
+      state.dominance.hiddenBookSlugs = [];
+      state.dominance.selectionInitialized = true;
+      renderDominance();
+      savePreferences();
+    });
+    els.dominanceNoneBtn.addEventListener('click', () => {
+      if (!state.model) return;
+      const data = state.model.aggregateDominance({ metric: state.dominance.metric, aggregation: state.dominance.aggregation, filters: state.filters });
+      state.dominance.hiddenBookSlugs = data.books.map(book => book.slug);
+      state.dominance.selectionInitialized = true;
+      renderDominance();
+      savePreferences();
+    });
+    els.dominanceSourceList.addEventListener('change', event => {
+      const input = event.target.closest('input[data-book-slug]');
+      if (!input) return;
+      const hidden = new Set(state.dominance.hiddenBookSlugs || []);
+      if (input.checked) hidden.delete(input.dataset.bookSlug);
+      else hidden.add(input.dataset.bookSlug);
+      state.dominance.hiddenBookSlugs = [...hidden];
+      state.dominance.selectionInitialized = true;
+      renderDominance();
+      savePreferences();
     });
     els.networkModeSelect.addEventListener('change', () => {
       state.network.mode = els.networkModeSelect.value;
@@ -1768,6 +1824,83 @@ TR.app = (() => {
     });
   }
 
+  function renderDominance() {
+    if (!state.model || state.activeView !== 'dominance') return;
+    const data = state.model.aggregateDominance({
+      metric: state.dominance.metric,
+      aggregation: state.dominance.aggregation,
+      filters: state.filters
+    });
+    if (!state.dominance.selectionInitialized) {
+      state.dominance.hiddenBookSlugs = data.books.slice(5).map(book => book.slug);
+      state.dominance.selectionInitialized = true;
+      savePreferences();
+    }
+    const hidden = new Set(state.dominance.hiddenBookSlugs || []);
+    const visible = new Set(data.books.filter(book => !hidden.has(book.slug)).map(book => book.slug));
+    els.dominanceVisibleCount.textContent = `${visible.size}/${data.books.length}`;
+
+    els.dominanceSourceList.replaceChildren();
+    if (!data.books.length) {
+      els.dominanceSourceList.append(emptyMessage('אין מקורות להצגה לפי המסננים הפעילים.'));
+    } else {
+      const fragment = document.createDocumentFragment();
+      data.books.forEach((book, index) => {
+        const label = document.createElement('label');
+        label.className = 'dominance-source-item';
+        label.title = `${book.title}\nכיסוי: ${TR.utils.percent(book.coverageRatio, 0)}`;
+        label.innerHTML = `
+          <input type="checkbox" data-book-slug="${TR.utils.escapeHtml(book.slug)}" ${visible.has(book.slug) ? 'checked' : ''}>
+          <span class="dominance-source-dot" style="--source-color:${book.color}"></span>
+          <span class="dominance-source-title">${index + 1}. ${TR.utils.escapeHtml(book.title)}</span>
+          <span class="dominance-source-stat">${TR.utils.percent(book.coverageRatio, 0)}</span>`;
+        fragment.append(label);
+      });
+      els.dominanceSourceList.append(fragment);
+    }
+
+    const metricLabel = {
+      normScore: 'ציון מנורמל',
+      alignmentScore: 'ציון יישור',
+      score: 'score',
+      fullAlignment: 'יישור מלא'
+    }[state.dominance.metric] || state.dominance.metric;
+    const resetHover = () => {
+      els.dominanceHoverInfo.textContent = `העבר את הסמן על הגרף כדי לראות את המקורות הדומיננטיים בכל יחידה · מדד: ${metricLabel}.`;
+    };
+    resetHover();
+
+    TR.visualizations.renderSourceDominance(els.dominanceSvg, data, {
+      visibleBookSlugs: visible,
+      normalizeDisplay: state.dominance.normalizeDisplay,
+      showTrend: state.dominance.showTrend,
+      onHover: payload => {
+        if (!payload) {
+          resetHover();
+          return;
+        }
+        const top = payload.items.slice(0, 5);
+        els.dominanceHoverInfo.innerHTML = `<b>${TR.utils.escapeHtml(payload.record?.label || `יחידה ${payload.index + 1}`)}</b>`
+          + (top.length ? top.map(item => `<span class="dominance-hover-source" style="--source-color:${item.book.color}">${TR.utils.escapeHtml(item.book.title)}: <b>${TR.utils.escapeHtml(payload.valueLabel(item.value))}</b></span>`).join('') : ' · אין התאמות פעילות ביחידה זו');
+      },
+      onPointClick: ({ book, point, record }) => {
+        if (!record?.id) return;
+        state.filters.bookSlugs = [book.slug];
+        renderBookMultiOptions();
+        selectRecord(record.id, false);
+        if (point?.candidateId) state.activeCandidateId = point.candidateId;
+        setView('read');
+        updateAfterFilters(false);
+      },
+      onSegmentClick: ({ record }) => {
+        if (!record?.id) return;
+        selectRecord(record.id, false);
+        setView('read');
+        updateAfterFilters(false);
+      }
+    });
+  }
+
   function renderNetwork() {
     if (!state.model || state.activeView !== 'network') return;
     const options = { minNorm: state.network.minNorm, filters: state.filters };
@@ -3024,6 +3157,7 @@ TR.app = (() => {
     if (state.activeView === 'synopsis') renderSynopsis();
     else if (state.activeView === 'reverse') renderReverse();
     else if (state.activeView === 'matrix') renderMatrix();
+    else if (state.activeView === 'dominance') renderDominance();
     else if (state.activeView === 'network') renderNetwork();
     else if (state.activeView === 'scatter') renderScatter();
     else if (state.activeView === 'library') renderLibrary();
@@ -3128,6 +3262,10 @@ TR.app = (() => {
     els.matrixGranularitySelect.value = state.matrix.granularity;
     els.matrixBooksInput.value = String(state.matrix.books);
     els.matrixBooksValue.textContent = String(state.matrix.books);
+    els.dominanceMetricSelect.value = state.dominance.metric;
+    els.dominanceAggregationSelect.value = state.dominance.aggregation;
+    els.dominanceNormalizeInput.checked = state.dominance.normalizeDisplay;
+    els.dominanceTrendInput.checked = state.dominance.showTrend;
     els.networkModeSelect.value = state.network.mode;
     els.networkThresholdInput.value = String(state.network.minNorm);
     els.networkThresholdValue.textContent = TR.utils.percent(state.network.minNorm, 0);
@@ -3180,6 +3318,7 @@ TR.app = (() => {
       localStorage.setItem(TR.config.storageKeys.preferences, JSON.stringify({
         filters: state.filters,
         matrix: state.matrix,
+        dominance: state.dominance,
         network: { ...state.network, selected: null },
         synopsis: {
           topCount: state.synopsis.topCount,
@@ -3217,6 +3356,13 @@ TR.app = (() => {
         if (!Array.isArray(state.filters.categories)) state.filters.categories = [];
       }
       if (saved.matrix) state.matrix = { ...state.matrix, ...saved.matrix };
+      if (saved.dominance) state.dominance = { ...state.dominance, ...saved.dominance };
+      if (!['normScore', 'alignmentScore', 'score', 'fullAlignment'].includes(state.dominance.metric)) state.dominance.metric = 'normScore';
+      if (!['max', 'avg'].includes(state.dominance.aggregation)) state.dominance.aggregation = 'max';
+      if (!Array.isArray(state.dominance.hiddenBookSlugs)) state.dominance.hiddenBookSlugs = [];
+      if (typeof state.dominance.selectionInitialized !== 'boolean') state.dominance.selectionInitialized = false;
+      if (typeof state.dominance.normalizeDisplay !== 'boolean') state.dominance.normalizeDisplay = true;
+      if (typeof state.dominance.showTrend !== 'boolean') state.dominance.showTrend = true;
       if (saved.network) state.network = { ...state.network, ...saved.network, selected: null };
       if (!['cooccurrence', 'source', 'sourceGeniza'].includes(state.network.mode)) state.network.mode = 'cooccurrence';
       if (saved.synopsis) {

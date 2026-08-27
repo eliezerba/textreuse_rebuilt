@@ -105,8 +105,8 @@
         <button class="view-tab" type="button" data-view="synopsis" role="tab" aria-selected="false">סינופסיס <span id="synopsisTabCount" class="tab-count">0</span></button>
         <button class="view-tab" type="button" data-view="reverse" role="tab" aria-selected="false">קריאה הפוכה</button>
         <button class="view-tab" type="button" data-view="matrix" role="tab" aria-selected="false">מפת חום</button>
+        <button class="view-tab" type="button" data-view="dominance" role="tab" aria-selected="false">דומיננטיות מקורות</button>
         <button class="view-tab" type="button" data-view="network" role="tab" aria-selected="false">רשת ספרים</button>
-        <button class="view-tab" type="button" data-view="scatter" role="tab" aria-selected="false">פיזור ציונים</button>
         <button class="view-tab" type="button" data-view="library" role="tab" aria-selected="false">קטלוג ספרים</button>
         <button class="view-tab" type="button" data-view="diagnostics" role="tab" aria-selected="false">אבחון דאטה</button>
       </nav>
@@ -355,6 +355,48 @@
           </div>
         </div>
         <div id="heatmapContainer" class="heatmap-container"></div>
+      </section>
+
+      <section class="view-panel" data-view="dominance">
+        <div class="visualization-header">
+          <div>
+            <p class="pane-kicker">התפתחות לאורך הטקסט</p>
+            <h2>דומיננטיות מקורות לאורך ספר המקור</h2>
+            <p>כל קו מייצג חיבור מתוך הדאטהסט. ציר X מתקדם לפי יחידות ספר המקור; גובה הקו מייצג את הציון שנבחר לאותו מקור באותה יחידה. כברירת מחדל מוצגים חמשת המקורות הדומיננטיים ביותר, עם נרמול לתצוגה ובמצב מגמה מוחלק. אפשר לעבור לתצוגת הקווים הגולמיים בכל עת.</p>
+          </div>
+          <div class="visualization-controls dominance-controls">
+            <label><span>ציון</span><select id="dominanceMetricSelect">
+              <option value="normScore">ציון מנורמל</option>
+              <option value="alignmentScore">ציון יישור</option>
+              <option value="score">score</option>
+              <option value="fullAlignment">יישור מלא (0/1)</option>
+            </select></label>
+            <label><span>כאשר יש כמה קטעים מאותו מקור</span><select id="dominanceAggregationSelect">
+              <option value="max">המועמד החזק ביותר</option>
+              <option value="avg">ממוצע המועמדים</option>
+            </select></label>
+            <label class="dominance-toggle"><input id="dominanceNormalizeInput" type="checkbox" checked><span>נרמול לתצוגה <small>המקסימום המוצג = 100%</small></span></label>
+            <label class="dominance-toggle"><input id="dominanceTrendInput" type="checkbox" checked><span>תצוגת מגמה <small>מחליפה את הקווים הגולמיים · ממוצע נע של 5 יחידות</small></span></label>
+          </div>
+        </div>
+        <div class="dominance-layout">
+          <aside class="pane dominance-source-pane">
+            <div class="pane-header dominance-source-head">
+              <div><p class="pane-kicker">מקורות בדאטהסט</p><h2>בחירת קווים</h2></div>
+              <span id="dominanceVisibleCount" class="count-badge">0</span>
+            </div>
+            <div class="dominance-source-actions">
+              <button id="dominanceTopBtn" class="text-button" type="button">5 מובילים</button>
+              <button id="dominanceAllBtn" class="text-button" type="button">הצג הכל</button>
+              <button id="dominanceNoneBtn" class="text-button" type="button">הסתר הכל</button>
+            </div>
+            <div id="dominanceSourceList" class="dominance-source-list"></div>
+          </aside>
+          <section class="dominance-chart-column">
+            <div id="dominanceHoverInfo" class="dominance-hover-info">העבר את הסמן על הגרף כדי לראות את המקורות הדומיננטיים בכל יחידה.</div>
+            <div class="svg-card dominance-chart-card"><svg id="dominanceSvg"></svg></div>
+          </section>
+        </div>
       </section>
 
       <section class="view-panel" data-view="network">

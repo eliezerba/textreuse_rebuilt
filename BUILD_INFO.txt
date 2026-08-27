@@ -7,3 +7,6 @@ Features include:
 - Fast large-file path: 256MB threshold, adaptive ~4MB/64-record batches, throttled progress events, lazy alignment construction, asynchronous IndexedDB raw caching with bounded backpressure, compact active model, server-side streaming
 - Exact TEXTREUSE color mode on the main reading view: sanitized original aligned HTML is rendered directly, without token-color inference
 - Original system-color mode retained
+- Source-dominance tab beside the heat map: per-work lines across source passages, per-source toggles, score switching, max/average aggregation, hover and click-through to reading
+
+Dominance refinements: default top 5, optional 5-unit trend line, display normalization enabled by default.

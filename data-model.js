@@ -831,6 +831,109 @@ TR.DataModel = class DataModel {
     return { books, rows, maxValue, metric, granularity };
   }
 
+  aggregateDominance({ metric = 'normScore', aggregation = 'max', filters = {} } = {}) {
+    const requestedBooks = new Set(filters.bookSlugs || []);
+    const records = this.getVisibleRecords(filters).sort(TR.DataModel.compareSourceRecords);
+    const valuesByBook = new Map();
+
+    const metricValue = candidate => {
+      if (metric === 'score') return TR.utils.finite(candidate.score);
+      if (metric === 'alignmentScore') return TR.utils.finite(candidate.alignmentScore);
+      if (metric === 'fullAlignment') return candidate.fullAlignment ? 1 : 0;
+      return TR.utils.finite(candidate.normScore);
+    };
+
+    for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
+      const record = records[recordIndex];
+      const grouped = new Map();
+      for (const candidate of this.getCandidates(record.id, filters)) {
+        if (candidate.isSelf) continue;
+        if (requestedBooks.size && !requestedBooks.has(candidate.bookSlug)) continue;
+        const group = grouped.get(candidate.bookSlug) || { candidates: [], bestCandidate: null, sum: 0, max: 0 };
+        const value = metricValue(candidate);
+        group.candidates.push(candidate);
+        group.sum += value;
+        if (!group.bestCandidate || value > group.max) {
+          group.max = value;
+          group.bestCandidate = candidate;
+        }
+        grouped.set(candidate.bookSlug, group);
+      }
+
+      for (const [bookSlug, group] of grouped) {
+        const value = aggregation === 'avg'
+          ? (group.candidates.length ? group.sum / group.candidates.length : 0)
+          : group.max;
+        const entry = valuesByBook.get(bookSlug) || {
+          values: new Array(records.length).fill(null),
+          total: 0,
+          max: 0,
+          coverage: 0
+        };
+        entry.values[recordIndex] = {
+          recordId: record.id,
+          recordLabel: record.displayRef,
+          value,
+          count: group.candidates.length,
+          candidateId: group.bestCandidate?.id || null
+        };
+        entry.total += value;
+        entry.max = Math.max(entry.max, value);
+        if (value > 0) entry.coverage += 1;
+        valuesByBook.set(bookSlug, entry);
+      }
+    }
+
+    const colorableSlugs = this.books
+      .filter(book => book.nonSelfCandidateCount > 0)
+      .map(book => book.slug)
+      .sort((a, b) => String(a).localeCompare(String(b), 'en'));
+    const palette = Array.isArray(TR.config?.palette) && TR.config.palette.length ? TR.config.palette : null;
+    const colorBySlug = new Map(colorableSlugs.map((slug, index) => [
+      slug,
+      palette ? palette[index % palette.length] : TR.utils.hashColor(slug)
+    ]));
+
+    const books = this.books
+      .filter(book => book.nonSelfCandidateCount > 0)
+      .filter(book => !requestedBooks.size || requestedBooks.has(book.slug))
+      .map(book => {
+        const entry = valuesByBook.get(book.slug) || { values: new Array(records.length).fill(null), total: 0, max: 0, coverage: 0 };
+        return {
+          slug: book.slug,
+          title: book.localTitle || book.title,
+          resourceId: book.localResource?.id || book.slug,
+          color: colorBySlug.get(book.slug) || TR.utils.hashColor(book.slug),
+          values: entry.values,
+          total: entry.total,
+          max: entry.max,
+          coverage: entry.coverage,
+          coverageRatio: records.length ? entry.coverage / records.length : 0
+        };
+      })
+      .sort((a, b) => b.total - a.total || b.coverage - a.coverage || b.max - a.max || a.title.localeCompare(b.title, 'he'));
+
+    const normalizedScale = metric === 'normScore' || metric === 'alignmentScore' || metric === 'fullAlignment';
+    const maxValue = normalizedScale
+      ? 1
+      : Math.max(1, ...books.flatMap(book => book.values.map(point => point?.value || 0)));
+
+    return {
+      metric,
+      aggregation,
+      records: records.map((record, index) => ({
+        id: record.id,
+        index,
+        label: record.displayRef,
+        chapter: record.chapter,
+        datasetLabel: record.datasetLabel
+      })),
+      books,
+      maxValue,
+      normalizedScale
+    };
+  }
+
   buildCooccurrenceGraph({ minNorm = 0.2, maxNodes = TR.config.maxNetworkNodes, filters = {} } = {}) {
     const selectedBooks = new Set(filters.bookSlugs || []);
     const nodeBooks = this.books

@@ -45,3 +45,22 @@ Optional upgrades for new corpora/results:
 - Add DTS information only when an endpoint exists. DTS is never required to open the viewer.
 
 The server now discovers `.json`, `.jsonl`, and `.ndjson` files. Multiple TEXTREUSE and corpus files may be selected together; only TEXTREUSE files contribute candidate relations, while corpus files populate the Passage Registry.
+
+
+## Source-dominance visualization
+
+A new **דומיננטיות מקורות** tab sits beside the heat map. It plots each dataset work as a line across the ordered source-book passages. Users can toggle every source independently, switch among normalized score, alignment score, raw score, and full-alignment rate, and choose max-vs-average aggregation when several candidate passages from the same work match one source passage. Hover reveals the strongest sources for the current source passage; clicking returns to the aligned reading view.
+
+## Source Dominance tab refinements (2026-08-27)
+
+- Default source visibility is now the five highest-ranked dominant sources.
+- Added a one-click "5 מובילים" reset alongside show/hide-all controls.
+- Added an optional trend line (default ON), computed as a centered five-segment moving average for each visible source.
+- Added display normalization (default ON): the maximum score currently visible in the chart is mapped to 100%, while hover labels retain the underlying raw score in parentheses.
+- Source checkboxes remain fully interactive, and all score metrics continue to be supported.
+
+
+## Source dominance v3
+- Trend mode now replaces the raw source lines instead of overlaying them.
+- Turning trend mode off restores the raw per-segment lines.
+- Removed the Score Distribution tab from the main navigation.

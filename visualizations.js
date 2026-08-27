@@ -333,10 +333,197 @@ TR.visualizations = (() => {
     root.append(pointsLayer);
   }
 
+  function renderSourceDominance(svg, data, { visibleBookSlugs = null, normalizeDisplay = true, showTrend = true, onPointClick = () => {}, onSegmentClick = () => {}, onHover = () => {} } = {}) {
+    clear(svg);
+    const width = 1180;
+    const height = 620;
+    const margin = { top: 24, right: 26, bottom: 76, left: 76 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'דומיננטיות מקורות לאורך ספר המקור');
+
+    const allowed = visibleBookSlugs instanceof Set ? visibleBookSlugs : new Set(data.books.map(book => book.slug));
+    const books = data.books.filter(book => allowed.has(book.slug));
+    const records = data.records || [];
+    if (!records.length || !books.length) {
+      const text = svgElement('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', class: 'dominance-empty' });
+      text.textContent = !records.length ? 'אין קטעי מקור להצגה לפי המסננים הפעילים' : 'כל המקורות מוסתרים. אפשר להדליק מקורות ברשימה.';
+      svg.append(text);
+      return;
+    }
+
+    const rawVisibleMax = Math.max(1e-9, ...books.flatMap(book => book.values.map(point => Number(point?.value) || 0)));
+    const maxValue = normalizeDisplay ? 1 : Math.max(1e-9, Number(data.maxValue) || rawVisibleMax || 1);
+    const displayValue = value => normalizeDisplay
+      ? TR.utils.clamp((Number(value) || 0) / rawVisibleMax, 0, 1)
+      : (Number(value) || 0);
+    const x = index => margin.left + (records.length <= 1 ? innerWidth / 2 : (index / (records.length - 1)) * innerWidth);
+    const y = value => margin.top + innerHeight - (TR.utils.clamp(displayValue(value), 0, maxValue) / maxValue) * innerHeight;
+    const rawValueLabel = value => data.normalizedScale
+      ? TR.utils.percent(value, 0)
+      : TR.utils.compactNumber(value, Math.abs(value) < 10 ? 1 : 0);
+    const valueLabel = value => normalizeDisplay
+      ? `${TR.utils.percent(displayValue(value), 0)} (${rawValueLabel(value)})`
+      : rawValueLabel(value);
+
+    const grid = svgElement('g', { class: 'dominance-grid' });
+    const yTicks = 5;
+    for (let i = 0; i <= yTicks; i += 1) {
+      const ratio = i / yTicks;
+      const value = maxValue * ratio;
+      const yy = margin.top + innerHeight - ratio * innerHeight;
+      grid.append(svgElement('line', { x1: margin.left, y1: yy, x2: margin.left + innerWidth, y2: yy }));
+      const label = svgElement('text', { x: margin.left - 12, y: yy + 4, 'text-anchor': 'end', class: 'dominance-axis-label' });
+      label.textContent = normalizeDisplay ? TR.utils.percent(value, 0) : rawValueLabel(value);
+      grid.append(label);
+    }
+
+    const tickCount = Math.min(9, records.length);
+    const tickIndices = [...new Set(Array.from({ length: tickCount }, (_, i) => Math.round(i * (records.length - 1) / Math.max(1, tickCount - 1))))];
+    for (const index of tickIndices) {
+      const xx = x(index);
+      grid.append(svgElement('line', { x1: xx, y1: margin.top, x2: xx, y2: margin.top + innerHeight }));
+      const label = svgElement('text', { x: xx, y: margin.top + innerHeight + 28, 'text-anchor': 'middle', class: 'dominance-axis-label' });
+      label.textContent = truncate(records[index]?.label || String(index + 1), 18);
+      grid.append(label);
+    }
+    svg.append(grid);
+
+    const xTitle = svgElement('text', { x: margin.left + innerWidth / 2, y: height - 16, 'text-anchor': 'middle', class: 'dominance-axis-title' });
+    xTitle.textContent = 'יחידות ספר המקור →';
+    const yTitle = svgElement('text', { x: 20, y: margin.top + innerHeight / 2, transform: `rotate(-90 20 ${margin.top + innerHeight / 2})`, 'text-anchor': 'middle', class: 'dominance-axis-title' });
+    const metricNames = { normScore: 'ציון מנורמל', alignmentScore: 'ציון יישור', score: 'score', fullAlignment: 'יישור מלא' };
+    yTitle.textContent = `${metricNames[data.metric] || data.metric}${normalizeDisplay ? ' · מנורמל לתצוגה' : ''}`;
+    svg.append(xTitle, yTitle);
+
+    const lineLayer = svgElement('g', { class: 'dominance-lines' });
+    const trendLayer = svgElement('g', { class: 'dominance-trends' });
+    const hitLayer = svgElement('g', { class: 'dominance-hits' });
+    const movingAverage = (values, windowSize = 5) => {
+      const half = Math.floor(windowSize / 2);
+      return values.map((_, index) => {
+        let sum = 0;
+        let count = 0;
+        for (let j = Math.max(0, index - half); j <= Math.min(values.length - 1, index + half); j += 1) {
+          sum += Number(values[j]?.value) || 0;
+          count += 1;
+        }
+        return count ? sum / count : 0;
+      });
+    };
+    for (const book of [...books].reverse()) {
+      if (showTrend) {
+        const trendValues = movingAverage(book.values, 5);
+        const trendPathData = trendValues.map((value, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(value).toFixed(2)}`).join(' ');
+        const trendPath = svgElement('path', {
+          d: trendPathData,
+          stroke: book.color,
+          class: 'dominance-trend-line',
+          'data-book-slug': book.slug
+        });
+        const trendTitle = svgElement('title');
+        trendTitle.textContent = `${book.title} · תצוגת מגמה (ממוצע נע של 5 יחידות)`;
+        trendPath.append(trendTitle);
+        trendLayer.append(trendPath);
+      } else {
+        const pathData = book.values.map((point, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(point?.value || 0).toFixed(2)}`).join(' ');
+        const path = svgElement('path', {
+          d: pathData,
+          stroke: book.color,
+          class: 'dominance-line',
+          'data-book-slug': book.slug
+        });
+        const title = svgElement('title');
+        title.textContent = `${book.title} · כיסוי ${TR.utils.percent(book.coverageRatio, 0)} · מקסימום ${rawValueLabel(book.max)}${normalizeDisplay ? ` · תצוגה ${TR.utils.percent(displayValue(book.max), 0)}` : ''}`;
+        path.append(title);
+        lineLayer.append(path);
+      }
+
+      book.values.forEach((point, index) => {
+        if (!point || point.value <= 0) return;
+        const hit = svgElement('circle', {
+          cx: x(index),
+          cy: y(point.value),
+          r: 6.5,
+          class: 'dominance-point-hit',
+          tabindex: 0
+        });
+        const hitTitle = svgElement('title');
+        hitTitle.textContent = `${book.title}\n${records[index]?.label || ''}\n${metricNames[data.metric] || data.metric}: ${valueLabel(point.value)}`;
+        hit.append(hitTitle);
+        hit.addEventListener('click', event => {
+          event.stopPropagation();
+          onPointClick({ book, point, record: records[index], index });
+        });
+        hit.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') onPointClick({ book, point, record: records[index], index });
+        });
+        hitLayer.append(hit);
+      });
+    }
+    if (showTrend) svg.append(trendLayer);
+    else svg.append(lineLayer);
+
+    const crosshairLayer = svgElement('g', { visibility: 'hidden' });
+    const crosshair = svgElement('line', { y1: margin.top, y2: margin.top + innerHeight, class: 'dominance-crosshair' });
+    const dotLayer = svgElement('g');
+    crosshairLayer.append(crosshair, dotLayer);
+
+    const overlay = svgElement('rect', {
+      x: margin.left,
+      y: margin.top,
+      width: innerWidth,
+      height: innerHeight,
+      class: 'dominance-overlay'
+    });
+    const nearestIndex = event => {
+      const point = svg.createSVGPoint();
+      point.x = event.clientX;
+      point.y = event.clientY;
+      const matrix = svg.getScreenCTM();
+      if (!matrix) return 0;
+      const local = point.matrixTransform(matrix.inverse());
+      const ratio = TR.utils.clamp((local.x - margin.left) / Math.max(1, innerWidth), 0, 1);
+      return Math.round(ratio * Math.max(0, records.length - 1));
+    };
+    const showIndex = index => {
+      const xx = x(index);
+      crosshair.setAttribute('x1', xx);
+      crosshair.setAttribute('x2', xx);
+      clear(dotLayer);
+      const items = books.map(book => ({ book, point: book.values[index], value: book.values[index]?.value || 0 }))
+        .filter(item => item.value > 0)
+        .sort((a, b) => b.value - a.value);
+      for (const item of items.slice(0, 10)) {
+        dotLayer.append(svgElement('circle', {
+          cx: xx,
+          cy: y(item.value),
+          r: 4,
+          fill: item.book.color,
+          class: 'dominance-crosshair-dot'
+        }));
+      }
+      crosshairLayer.setAttribute('visibility', 'visible');
+      onHover({ record: records[index], index, items, valueLabel, metric: data.metric });
+    };
+    overlay.addEventListener('pointermove', event => showIndex(nearestIndex(event)));
+    overlay.addEventListener('pointerleave', () => {
+      crosshairLayer.setAttribute('visibility', 'hidden');
+      onHover(null);
+    });
+    overlay.addEventListener('click', event => {
+      const index = nearestIndex(event);
+      onSegmentClick({ record: records[index], index });
+    });
+    svg.append(overlay, hitLayer, crosshairLayer);
+  }
+
   function truncate(text, length) {
     const value = String(text ?? '');
     return value.length > length ? `${value.slice(0, length - 1)}…` : value;
   }
 
-  return { renderHeatmap, renderNetwork, renderScatter };
+  return { renderHeatmap, renderNetwork, renderScatter, renderSourceDominance };
 })();
