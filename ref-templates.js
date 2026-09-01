@@ -223,8 +223,94 @@ TR.refTemplates = (() => {
     };
   }
 
+  function looksLikeEditionToken(value) {
+    const token = String(value || '').trim();
+    if (!token) return false;
+    return /(?:1[5-9]\d{2}|20\d{2})/.test(token) && /^[\p{L}\p{N}_ .'-]+$/u.test(token);
+  }
+
+  function composeLegacySefariaLocation(raw, categories = [], canonicalTitle = '') {
+    const markerMatch = [...raw.matchAll(/[-_]Sefaria_/g)].at(-1);
+    if (!markerMatch) return null;
+    const markerIndex = markerMatch.index;
+    const marker = markerMatch[0];
+
+    const head = raw.slice(0, markerIndex);
+    const tail = raw.slice(markerIndex + marker.length);
+    const headParts = head.split('-').filter(Boolean);
+    if (headParts.length < 2) return null;
+
+    let bookIndex = headParts.length - 1;
+    let editionToken = '';
+    if (bookIndex > 0 && looksLikeEditionToken(headParts[bookIndex])) {
+      editionToken = headParts[bookIndex];
+      bookIndex -= 1;
+    }
+
+    const encodedBookSlug = headParts[bookIndex] || '';
+    const encodedCategory = headParts.slice(0, bookIndex).join('-');
+    const bookTitle = humanize(canonicalTitle || encodedBookSlug || 'Unknown');
+    const bookSlug = slugifyTitle(canonicalTitle || encodedBookSlug || 'Unknown');
+    const suffixParts = splitSuffix(tail);
+    const namedPathTitles = suffixParts.namedTitle ? [suffixParts.namedTitle] : [];
+    const addressTokens = [...suffixParts.addressTokens];
+    const address = addressTokens.join(':');
+    const directRef = !namedPathTitles.length && address ? `${bookTitle} ${address}` : null;
+    const commaRef = namedPathTitles.length
+      ? `${bookTitle}, ${namedPathTitles.join(', ')}${address ? ` ${address}` : ''}`
+      : null;
+    const compactNodeRef = namedPathTitles.length
+      ? `${bookTitle}, ${namedPathTitles.join(' ')}${address ? ` ${address}` : ''}`
+      : null;
+    const looseRef = `${bookTitle}${namedPathTitles.length ? ` ${namedPathTitles.join(' ')}` : ''}${address ? ` ${addressTokens.join(' ')}` : ''}`.trim();
+    const refCandidates = [...new Set([directRef, commaRef, compactNodeRef, looseRef].filter(Boolean))];
+    const categoryPathRaw = Array.isArray(categories) ? categories.filter(value => String(value || '').trim()) : [];
+    const encodedCategoryPath = encodedCategory ? encodedCategory.split('_').filter(Boolean) : [];
+    const issues = [];
+    if (!addressTokens.length) issues.push({ code: 'missing-address', message: 'לא זוהתה כתובת מספרית אחרי Sefaria.' });
+    if (!encodedBookSlug) issues.push({ code: 'missing-book', message: 'לא זוהה שם חיבור במזהה ספריא.' });
+
+    return {
+      raw,
+      prefix: head,
+      suffix: tail,
+      inferredSlug: encodedBookSlug,
+      categorySlug: encodedBookSlug,
+      categoryPathRaw,
+      categoryPath: categoryPathRaw.map(humanize),
+      bookCategoryIndex: -1,
+      categoryAncestors: encodedCategoryPath,
+      encodedCategory,
+      encodedCategoryPath,
+      editionToken,
+      categoryNodeSlugs: suffixParts.namedTokens,
+      categoryNodeTitles: namedPathTitles,
+      categoryAddressTokens: [],
+      bookSlug,
+      bookTitle,
+      suffixTokens: suffixParts.suffixTokens,
+      namedTokens: suffixParts.namedTokens,
+      suffixNamedTitle: suffixParts.namedTitle,
+      namedPathTitles,
+      namedTitle: suffixParts.namedTitle,
+      addressTokens,
+      address,
+      directRef,
+      simpleRef: directRef,
+      refCandidates,
+      searchQuery: commaRef || compactNodeRef || looseRef || bookTitle,
+      display: directRef || commaRef || compactNodeRef || looseRef || humanize(raw),
+      issues,
+      templateVersion: 4,
+      locationFormat: 'legacy-sefaria-hyphen',
+      hierarchyResolution: canonicalTitle ? 'canonical' : 'encoded-location'
+    };
+  }
+
   function parseLocation(location, categories = []) {
     const raw = String(location || '').trim();
+    const legacy = composeLegacySefariaLocation(raw, categories);
+    if (legacy) return legacy;
     const index = inferBookCategoryIndex(categories);
     return composeLocation(raw, categories, index);
   }
@@ -232,8 +318,21 @@ TR.refTemplates = (() => {
   function hierarchyCandidates(parsed) {
     const categories = parsed?.categoryPathRaw || [];
     const output = [];
+    if (parsed?.bookTitle) {
+      output.push({
+        bookCategoryIndex: -1,
+        proposedTitle: parsed.bookTitle,
+        proposedSlug: parsed.bookSlug,
+        ancestors: parsed.categoryAncestors || [],
+        nodeSlugs: parsed.categoryNodeSlugs || [],
+        nodeTitles: parsed.namedPathTitles || [],
+        categoryAddressTokens: parsed.categoryAddressTokens || [],
+        localScore: parsed.locationFormat === 'legacy-sefaria-hyphen' ? 1.35 : 1
+      });
+    }
     for (let index = 0; index < categories.length; index += 1) {
       if (isAddressCategory(categories[index])) continue;
+      if (parsed?.bookTitle && normalize(humanize(categories[index])) === normalize(parsed.bookTitle)) continue;
       const tail = splitHierarchyTail(categories.slice(index + 1));
       output.push({
         bookCategoryIndex: index,
@@ -267,8 +366,11 @@ TR.refTemplates = (() => {
       ? hierarchy.bookCategoryIndex
       : parsed.bookCategoryIndex;
     const canonicalTitle = hierarchy.canonicalTitle || hierarchy.title || hierarchy.bookTitle || '';
+    const recomposed = parsed.locationFormat === 'legacy-sefaria-hyphen'
+      ? composeLegacySefariaLocation(parsed.raw, parsed.categoryPathRaw || [], canonicalTitle)
+      : composeLocation(parsed.raw, parsed.categoryPathRaw || [], categoryIndex, canonicalTitle);
     return {
-      ...composeLocation(parsed.raw, parsed.categoryPathRaw || [], categoryIndex, canonicalTitle),
+      ...recomposed,
       hierarchyResolution: hierarchy.resolution || (canonicalTitle ? 'sefaria-hierarchy' : parsed.hierarchyResolution),
       hierarchyConfidence: Number(hierarchy.confidence || hierarchy.score || 0),
       hierarchyAttempts: hierarchy.attempts || []
@@ -402,7 +504,13 @@ TR.refTemplates = (() => {
     });
   }
 
-  function addressVariants(tokens, depth = 0, addressTypes = []) {
+  function titleOrdinal(title) {
+    const match = String(title || '').match(/\b(IV|III|II|I)\b/i);
+    if (!match) return null;
+    return { I: 1, II: 2, III: 3, IV: 4 }[match[1].toUpperCase()] || null;
+  }
+
+  function addressVariants(tokens, depth = 0, addressTypes = [], options = {}) {
     const raw = (tokens || []).map(String).filter(Boolean);
     const candidates = [];
     const seen = new Set();
@@ -416,9 +524,25 @@ TR.refTemplates = (() => {
       candidates.push({ rawTokens: values, formattedTokens: formatted, address: key, reason });
     }
 
-    // Prefer an address whose length matches the schema. TEXTREUSE paths can
-    // repeat a chapter/section level both before and after the __ separator.
-    if (depth > 0 && raw.length > depth) add(raw.slice(-depth), 'schema-depth-tail');
+    // Older TEXTREUSE/Sefaria identifiers frequently append one internal
+    // sentence/document index after the actual Sefaria ref. In commentary on
+    // numbered biblical books, however, the first number can instead repeat
+    // the book ordinal (e.g. II Kings -> 2), so prefer the tail in that case.
+    if (depth > 0 && raw.length === depth + 1 && options.legacySefaria) {
+      const ordinal = titleOrdinal(options.bookTitle);
+      const first = Number(raw[0]);
+      if (ordinal && first === ordinal) {
+        add(raw.slice(-depth), 'legacy-book-ordinal-tail');
+        add(raw.slice(0, depth), 'legacy-drop-trailing-index');
+      } else {
+        add(raw.slice(0, depth), 'legacy-drop-trailing-index');
+        add(raw.slice(-depth), 'schema-depth-tail');
+      }
+    } else if (depth > 0 && raw.length > depth) {
+      // Prefer an address whose length matches the schema. TEXTREUSE paths can
+      // repeat a chapter/section level both before and after the __ separator.
+      add(raw.slice(-depth), 'schema-depth-tail');
+    }
     if (depth > 0 && raw.length === depth) add(raw, 'schema-depth-exact');
 
     // Remove only adjacent duplicates as a conservative normalization.
@@ -470,7 +594,10 @@ TR.refTemplates = (() => {
     // the canonical Sefaria reference.
     const canonicalPath = best.leaf.path || best.path;
     const pathPart = canonicalPath.length ? `, ${canonicalPath.join(', ')}` : '';
-    const variants = addressVariants(parsed.addressTokens, best.leaf.depth, best.leaf.addressTypes);
+    const variants = addressVariants(parsed.addressTokens, best.leaf.depth, best.leaf.addressTypes, {
+      legacySefaria: parsed.locationFormat === 'legacy-sefaria-hyphen',
+      bookTitle: canonicalTitle || parsed.bookTitle
+    });
     const refCandidates = variants.map(variant => ({
       ref: `${canonicalTitle}${pathPart}${variant.address ? ` ${variant.address}` : ''}`.trim(),
       ...variant
@@ -520,6 +647,7 @@ TR.refTemplates = (() => {
 
   return {
     parseLocation,
+    composeLegacySefariaLocation,
     applyHierarchy,
     hierarchyCandidates,
     inferBookCategoryIndex,

@@ -394,7 +394,25 @@
           </aside>
           <section class="dominance-chart-column">
             <div id="dominanceHoverInfo" class="dominance-hover-info">העבר את הסמן על הגרף כדי לראות את המקורות הדומיננטיים בכל יחידה.</div>
+            <div class="dominance-zoom-bar">
+              <span id="dominanceRangeInfo" class="selection-status">טווח: כל ספר המקור</span>
+              <button id="dominanceTopRangeBtn" class="secondary-button" type="button">5 מובילים בטווח</button>
+              <button id="dominanceResetZoomBtn" class="text-button" type="button" disabled>איפוס זום</button>
+              <small>גרור אופקית על הגרף כדי להתמקד בטווח.</small>
+            </div>
             <div class="svg-card dominance-chart-card"><svg id="dominanceSvg"></svg></div>
+            <section class="dominance-summary-card" aria-labelledby="dominanceSummaryTitle">
+              <div class="dominance-summary-head">
+                <div><p class="pane-kicker">סיכום הטווח</p><h3 id="dominanceSummaryTitle">נתוני דומיננטיות</h3></div>
+                <span id="dominanceSummaryRange" class="count-badge">כל הספר</span>
+              </div>
+              <div class="table-card dominance-summary-table-wrap">
+                <table class="diagnostic-table dominance-summary-table">
+                  <thead><tr><th>#</th><th>מקור</th><th>יחידות עם התאמה</th><th>כיסוי בטווח</th><th>ממוצע בטווח</th><th>מקסימום</th></tr></thead>
+                  <tbody id="dominanceSummaryBody"></tbody>
+                </table>
+              </div>
+            </section>
           </section>
         </div>
       </section>

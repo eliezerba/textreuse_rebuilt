@@ -681,6 +681,19 @@ code { padding: 2px 6px; border-radius: 5px; background: #edf1f4; direction: ltr
 .dominance-source-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 700; }
 .dominance-source-stat { color: var(--muted); font-size: 0.65rem; font-variant-numeric: tabular-nums; }
 .dominance-chart-column { min-width: 0; }
+.dominance-zoom-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.dominance-zoom-bar small { color: var(--muted); margin-inline-start: auto; }
+.dominance-zoom-bar button:disabled { opacity: .45; cursor: default; text-decoration: none; }
 .dominance-hover-info {
   min-height: 42px;
   margin-bottom: 8px;
@@ -707,7 +720,14 @@ code { padding: 2px 6px; border-radius: 5px; background: #edf1f4; direction: ltr
 .dominance-crosshair { stroke: #566775; stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; }
 .dominance-crosshair-dot { stroke: white; stroke-width: 1.5; pointer-events: none; }
 .dominance-overlay { fill: transparent; cursor: crosshair; }
+.dominance-selection { fill: rgba(49, 90, 112, .12); stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 5 4; pointer-events: none; }
 .dominance-empty { fill: var(--muted); font-size: 18px; font-family: var(--ui); }
+.dominance-summary-card { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.dominance-summary-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
+.dominance-summary-head h3 { margin: 0; font-family: var(--text); }
+.dominance-summary-table-wrap { max-height: 360px; overflow: auto; }
+.dominance-summary-table td:first-child, .dominance-summary-table th:first-child { width: 42px; text-align: center; }
+.dominance-summary-source { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; }
 
 .network-layout,
 .library-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 360px); gap: 14px; align-items: start; }

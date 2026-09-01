@@ -16,16 +16,35 @@
 - `visualizations.js`
 - `app.js`
 - `start_server.py`
-- `start_server.bat`
+- `start_server.js`
+- `start_server.ps1`
+- `START_TEXTREUSE.bat`
+- `data/manifest.json`
+- `.nojekyll`
 
-יש להעתיק לאותה תיקייה קובץ JSON אחד או כמה. קובצי הנתונים אינם כלולים בחבילה.
+החבילה כוללת את קובץ ה-JSON לדוגמה בתוך `data/`, והוא רשום מראש ב-`data/manifest.json`. לכן אותה חבילה פועלת גם מקומית וגם כאתר סטטי ב-GitHub Pages.
 
 ## הפעלה ב־Windows
 
-1. חלץ את קובץ ה־ZIP לתיקייה חדשה.
-2. העתק אליה את קובצי ה־JSON.
-3. לחץ פעמיים על `start_server.bat`.
-4. השרת יתחיל בדרך כלל ב־`http://localhost:8765`. אם הפורט תפוס, הוא יעבור אוטומטית לפורט פנוי אחר ויפתח את הכתובת הנכונה.
+1. חלץ את קובץ ה-ZIP לתיקייה חדשה.
+2. לחץ פעמיים על `START_TEXTREUSE.bat`.
+3. ה-launcher ינסה Python, אחר כך Node.js, ואם הם אינם מותקנים — PowerShell של Windows.
+4. השרת יתחיל בדרך כלל ב-`http://localhost:8765`. אם הפורט תפוס, הוא יעבור אוטומטית לפורט פנוי אחר ויפתח את הכתובת הנכונה.
+5. כדי להוסיף קובץ מקומי שאינו כלול באתר, אפשר לבחור אותו דרך ממשק המערכת; כדי לפרסם אותו גם ב-GitHub Pages, יש להכניס אותו ל-`data/` ולעדכן את ה-manifest באמצעות `python build_manifest.py`.
+
+אין לפתוח את `index.html` ישירות ב-`file://` כדרך ההפעלה הרגילה, משום שדפדפנים חוסמים במצב זה חלק מקריאות הקבצים ו-Web Workers.
+
+## העלאה ישירה ל-GitHub Pages
+
+החבילה מוכנה כאתר סטטי ללא build:
+
+1. העלה את **כל** תוכן התיקייה לשורש repository ב-GitHub.
+2. ב-`Settings -> Pages` בחר `GitHub Actions`.
+3. ה-workflow הכלול ב-`.github/workflows/deploy-pages.yml` יפרסם את האתר אוטומטית.
+
+קובצי JSON שמיועדים להיכלל באתר נשמרים ב-`data/`. GitHub Pages אינו מסוגל לסרוק תיקייה ולגלות קבצים בעצמו, ולכן `data/manifest.json` משמש כרשימת הקבצים הזמינים. קובץ הדוגמה המצורף כבר רשום בו.
+
+לפרטים קצרים ראה `GITHUB_PAGES.md`; להפעלה מקומית ראה `LOCAL_START.md`.
 
 ## הפעלה דרך GitHub Pages עם קובצי JSON ב־Google Drive
 
@@ -65,7 +84,7 @@ remoteSources: {
 
 בצע commit + push, ולאחר מכן רענן את אתר GitHub Pages. חלון בחירת המקורות יציג גם קבצים שמגיעים מ־Google Drive.
 
-בקבצים גדולים המערכת עוברת אוטומטית למצב streaming דרך Web Worker. מעל 64MB הקובץ אינו נקרא כולו ל־RAM; קבצים מעל 1GB עוברים באותו מסלול, עם מודל קומפקטי ו־raw הנשמר ב־IndexedDB כאשר מכסת האחסון של הדפדפן מאפשרת זאת.
+בקבצים גדולים המערכת עוברת אוטומטית למצב streaming דרך Web Worker. מעל 256MB הקובץ עובר למסלול streaming ואינו נקרא כולו ל־RAM; קבצים מעל 1GB עוברים באותו מסלול, עם מודל קומפקטי ו־raw הנשמר ב־IndexedDB כאשר מכסת האחסון של הדפדפן מאפשרת זאת.
 
 ## טעינת כמה מאגרים
 
@@ -243,3 +262,6 @@ remoteSources: {
 - רשימת מועמדים ארוכה מרונדרת במנות של 300 כדי למנוע יצירת עשרות אלפי רכיבי DOM בבת אחת.
 - תרשים הפיזור משתמש ב־reservoir sampling כאשר מספר הנקודות עולה על מגבלת התצוגה, בלי לבנות קודם מערך של כל הנקודות.
 - במתג `צבעי TEXTREUSE` עמוד הקריאה מציג את ה־HTML הצבעוני המקורי לאחר sanitization בטוח, ללא remapping של הצבעים בין token indices. כך הצבע נשאר על המילה המקורית. ברירת המחדל נשארת `צבעי המערכת`.
+
+### Folio ordering
+When source identifiers contain `fol` / `folio`, manuscript reading order is numeric: folio number first, then recto (`r`) before verso (`v`), then the unit number. For example: `fol 30r 1` precedes `fol 100r 1`, which precedes `fol 200r 1`.

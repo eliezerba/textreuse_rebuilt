@@ -10,3 +10,18 @@ Features include:
 - Source-dominance tab beside the heat map: per-work lines across source passages, per-source toggles, score switching, max/average aggregation, hover and click-through to reading
 
 Dominance refinements: default top 5, optional 5-unit trend line, display normalization enabled by default.
+
+2026-09-01 local/GitHub Pages packaging fixes:
+- Windows one-click launcher with Python -> Node.js -> PowerShell fallback
+- Static data/manifest.json discovery for GitHub Pages and other static hosts
+- Project-subpath-safe relative URLs (no root-relative /api fetch in the browser)
+- Included sample TEXTREUSE JSON under data/
+- GitHub Pages Actions workflow and .nojekyll
+- Local server discovery constrained to the app folder and optional sibling dataset folder
+- Folio ordering, legacy Sefaria parsing, and dominance zoom/range summary changes retained
+
+Final folio-order correction (2026-09-01):
+- Folio identifiers are sorted numerically by manuscript page: folio number, r/v, then unit number(s).
+- Folio sorting now takes precedence over generic source-book and local-metadata sorting.
+- Supports fol_30r_1, fol 30r 1, fol-30-r-1, and folio_30_v_2 style identifiers.
+- Regression test explicitly verifies fol 30 < fol 100 < fol 200.

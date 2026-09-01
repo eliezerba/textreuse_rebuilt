@@ -434,9 +434,59 @@ TR.DataModel = class DataModel {
     return raw.normalize('NFKD').toLowerCase().replace(/[\s_.,:;\-\u2013\u2014/\\]+/g, '');
   }
 
+  static parseSourceFolio(record) {
+    const raw = String(record?.rawId || record?.location || record?.displayRef || '');
+    // A manuscript folio is a numeric page position, never a lexical string.
+    // Accept common encodings such as:
+    //   fol_30r_1, fol 30r 1, fol-30-r-1, folio_30_v_2
+    const match = raw.match(/(?:^|[_\s-])fol(?:io)?[_\s-]*(\d+)[_\s-]*([rv])(?:[_\s-]+((?:\d+)(?:[_\s-]+\d+)*))?/i);
+    if (!match) return null;
+    const prefix = raw.slice(0, match.index).normalize('NFKD').toLowerCase().replace(/[\s_.,:;\-\u2013\u2014/\\]+/g, '');
+    const units = String(match[3] || '')
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map(value => Number(value))
+      .filter(Number.isFinite);
+    return {
+      prefix,
+      folio: Number(match[1]),
+      side: match[2].toLowerCase() === 'v' ? 1 : 0,
+      units
+    };
+  }
+
+  static compareFolioPositions(a, b) {
+    const left = TR.DataModel.parseSourceFolio(a);
+    const right = TR.DataModel.parseSourceFolio(b);
+    if (!left || !right) return null;
+
+    // Keep different manuscripts/resources grouped, but once the manuscript
+    // is the same, the folio number is always compared numerically.
+    if (left.prefix !== right.prefix) {
+      const prefixCompare = left.prefix.localeCompare(right.prefix, 'en', { numeric: true });
+      if (prefixCompare) return prefixCompare;
+    }
+    if (left.folio !== right.folio) return left.folio - right.folio;
+    if (left.side !== right.side) return left.side - right.side;
+
+    const length = Math.max(left.units.length, right.units.length);
+    for (let index = 0; index < length; index += 1) {
+      if (index >= left.units.length) return -1;
+      if (index >= right.units.length) return 1;
+      if (left.units[index] !== right.units[index]) return left.units[index] - right.units[index];
+    }
+    return 0;
+  }
+
   static compareSourceRecords(a, b) {
-    const bookCompare = String(a?.sourceBook?.slug || '').localeCompare(String(b?.sourceBook?.slug || ''), 'en');
+    // Folio order must win over generic string/reference sorting. In
+    // particular fol 30r must precede fol 200r (not the other way round).
+    const folioCompare = TR.DataModel.compareFolioPositions(a, b);
+    if (folioCompare !== null && folioCompare !== 0) return folioCompare;
+
+    const bookCompare = String(a?.sourceBook?.slug || '').localeCompare(String(b?.sourceBook?.slug || ''), 'en', { numeric: true });
     if (bookCompare) return bookCompare;
+
     const leftNamed = Array.isArray(a?.refTemplate?.namedPathTitles) ? a.refTemplate.namedPathTitles.join('>') : String(a?.refTemplate?.namedTitle || '');
     const rightNamed = Array.isArray(b?.refTemplate?.namedPathTitles) ? b.refTemplate.namedPathTitles.join('>') : String(b?.refTemplate?.namedTitle || '');
     if (leftNamed !== rightNamed) return Number(a?.index || 0) - Number(b?.index || 0);
@@ -616,6 +666,8 @@ TR.DataModel = class DataModel {
       }
     }
     this.records.sort((a, b) => {
+      const folioCompare = TR.DataModel.compareFolioPositions(a, b);
+      if (folioCompare !== null && folioCompare !== 0) return folioCompare;
       const aResource = a.localMetadata?.resourceId || a.resourceId || a.sourceBook?.slug || '';
       const bResource = b.localMetadata?.resourceId || b.resourceId || b.sourceBook?.slug || '';
       const resourceCompare = String(aResource).localeCompare(String(bResource), 'en');
@@ -931,6 +983,37 @@ TR.DataModel = class DataModel {
       books,
       maxValue,
       normalizedScale
+    };
+  }
+
+  static summarizeDominanceRange(data, startIndex = 0, endIndex = null) {
+    const records = Array.isArray(data?.records) ? data.records : [];
+    if (!records.length) return { startIndex: 0, endIndex: -1, records: [], books: [], unitCount: 0 };
+    const start = Math.max(0, Math.min(records.length - 1, Number(startIndex) || 0));
+    const requestedEnd = endIndex == null ? records.length - 1 : Number(endIndex);
+    const end = Math.max(start, Math.min(records.length - 1, Number.isFinite(requestedEnd) ? requestedEnd : records.length - 1));
+    const unitCount = end - start + 1;
+    const books = (data.books || []).map(book => {
+      const values = (book.values || []).slice(start, end + 1).map(point => Number(point?.value) || 0);
+      const total = values.reduce((sum, value) => sum + value, 0);
+      const coverage = values.filter(value => value > 0).length;
+      const max = values.length ? Math.max(...values) : 0;
+      return {
+        ...book,
+        rangeTotal: total,
+        rangeCoverage: coverage,
+        rangeCoverageRatio: unitCount ? coverage / unitCount : 0,
+        rangeAverage: unitCount ? total / unitCount : 0,
+        rangeActiveAverage: coverage ? total / coverage : 0,
+        rangeMax: max
+      };
+    }).sort((a, b) => b.rangeTotal - a.rangeTotal || b.rangeCoverage - a.rangeCoverage || b.rangeMax - a.rangeMax || a.title.localeCompare(b.title, 'he'));
+    return {
+      startIndex: start,
+      endIndex: end,
+      records: records.slice(start, end + 1),
+      books,
+      unitCount
     };
   }
 

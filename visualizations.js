@@ -333,7 +333,7 @@ TR.visualizations = (() => {
     root.append(pointsLayer);
   }
 
-  function renderSourceDominance(svg, data, { visibleBookSlugs = null, normalizeDisplay = true, showTrend = true, onPointClick = () => {}, onSegmentClick = () => {}, onHover = () => {} } = {}) {
+  function renderSourceDominance(svg, data, { visibleBookSlugs = null, normalizeDisplay = true, showTrend = true, onPointClick = () => {}, onSegmentClick = () => {}, onHover = () => {}, onRangeSelect = () => {} } = {}) {
     clear(svg);
     const width = 1180;
     const height = 620;
@@ -478,14 +478,25 @@ TR.visualizations = (() => {
       height: innerHeight,
       class: 'dominance-overlay'
     });
-    const nearestIndex = event => {
+    const selection = svgElement('rect', {
+      x: margin.left,
+      y: margin.top,
+      width: 0,
+      height: innerHeight,
+      class: 'dominance-selection',
+      visibility: 'hidden'
+    });
+    const localX = event => {
       const point = svg.createSVGPoint();
       point.x = event.clientX;
       point.y = event.clientY;
       const matrix = svg.getScreenCTM();
-      if (!matrix) return 0;
+      if (!matrix) return margin.left;
       const local = point.matrixTransform(matrix.inverse());
-      const ratio = TR.utils.clamp((local.x - margin.left) / Math.max(1, innerWidth), 0, 1);
+      return TR.utils.clamp(local.x, margin.left, margin.left + innerWidth);
+    };
+    const nearestIndex = event => {
+      const ratio = TR.utils.clamp((localX(event) - margin.left) / Math.max(1, innerWidth), 0, 1);
       return Math.round(ratio * Math.max(0, records.length - 1));
     };
     const showIndex = index => {
@@ -508,16 +519,60 @@ TR.visualizations = (() => {
       crosshairLayer.setAttribute('visibility', 'visible');
       onHover({ record: records[index], index, items, valueLabel, metric: data.metric });
     };
-    overlay.addEventListener('pointermove', event => showIndex(nearestIndex(event)));
+    let dragStartX = null;
+    let dragStartIndex = null;
+    let dragged = false;
+    overlay.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      dragStartX = localX(event);
+      dragStartIndex = nearestIndex(event);
+      dragged = false;
+      selection.setAttribute('x', dragStartX);
+      selection.setAttribute('width', 0);
+      selection.setAttribute('visibility', 'visible');
+      overlay.setPointerCapture?.(event.pointerId);
+    });
+    overlay.addEventListener('pointermove', event => {
+      if (dragStartX != null) {
+        const currentX = localX(event);
+        const width = Math.abs(currentX - dragStartX);
+        if (width > 4) dragged = true;
+        selection.setAttribute('x', Math.min(dragStartX, currentX));
+        selection.setAttribute('width', width);
+      }
+      showIndex(nearestIndex(event));
+    });
     overlay.addEventListener('pointerleave', () => {
-      crosshairLayer.setAttribute('visibility', 'hidden');
-      onHover(null);
+      if (dragStartX == null) {
+        crosshairLayer.setAttribute('visibility', 'hidden');
+        onHover(null);
+      }
+    });
+    overlay.addEventListener('pointerup', event => {
+      if (dragStartX == null) return;
+      const endIndex = nearestIndex(event);
+      const startIndex = dragStartIndex;
+      selection.setAttribute('visibility', 'hidden');
+      overlay.releasePointerCapture?.(event.pointerId);
+      dragStartX = null;
+      dragStartIndex = null;
+      if (dragged && Math.abs(endIndex - startIndex) >= 1) {
+        onRangeSelect({ startIndex: Math.min(startIndex, endIndex), endIndex: Math.max(startIndex, endIndex) });
+      }
+      setTimeout(() => { dragged = false; }, 0);
+    });
+    overlay.addEventListener('pointercancel', () => {
+      dragStartX = null;
+      dragStartIndex = null;
+      dragged = false;
+      selection.setAttribute('visibility', 'hidden');
     });
     overlay.addEventListener('click', event => {
+      if (dragged) return;
       const index = nearestIndex(event);
       onSegmentClick({ record: records[index], index });
     });
-    svg.append(overlay, hitLayer, crosshairLayer);
+    svg.append(overlay, selection, hitLayer, crosshairLayer);
   }
 
   function truncate(text, length) {

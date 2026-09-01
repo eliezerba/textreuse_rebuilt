@@ -18,51 +18,36 @@ END_PORT = 8865
 
 
 def discover_json_files(app_dir: Path | str) -> list[Path]:
-    """Find JSON/JSONL/NDJSON data files near the app directory, including sibling dataset folders."""
+    """Find data files in the app folder and its optional sibling ``dataset`` folder."""
     try:
         app_dir = Path(app_dir).resolve(strict=False)
     except OSError:
         app_dir = Path(app_dir)
 
-    workspace_dir = app_dir
-    if not (workspace_dir / "index.html").exists() and not (workspace_dir / "styles.css").exists():
-        workspace_dir = app_dir.parent
-
-    search_roots: list[Path] = []
-    current = workspace_dir
-    for _ in range(4):
-        try:
-            search_roots.append(current.resolve(strict=False))
-        except (OSError, ValueError):
-            search_roots.append(current)
-        try:
-            dataset_root = (current / "dataset").resolve(strict=False)
-        except (OSError, ValueError):
-            dataset_root = current / "dataset"
-        search_roots.append(dataset_root)
-        current = current.parent
-
+    # Keep discovery deliberately local. Older builds walked several parent
+    # directories, which could expose unrelated JSON files and make startup
+    # look broken when the viewer found many unexpected datasets.
+    search_roots = [app_dir, app_dir.parent / "dataset"]
     seen: set[Path] = set()
     discovered: list[Path] = []
     for root in search_roots:
         if not root.exists() or not root.is_dir():
             continue
-        candidates: list[Path] = []
         for pattern in ("*.json", "*.jsonl", "*.ndjson"):
-            candidates.extend(root.glob(pattern))
-        for path in sorted(candidates, key=lambda item: item.name.casefold()):
-            if not path.is_file():
-                continue
-            try:
-                resolved = path.resolve(strict=False)
-            except (OSError, ValueError):
-                resolved = path
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            discovered.append(resolved)
+            for path in sorted(root.glob(pattern), key=lambda item: item.name.casefold()):
+                if not path.is_file():
+                    continue
+                try:
+                    resolved = path.resolve(strict=False)
+                except (OSError, ValueError):
+                    resolved = path
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                discovered.append(resolved)
 
     return sorted(discovered, key=lambda item: item.name.casefold())
+
 
 
 class ReusableThreadingHTTPServer(socketserver.ThreadingTCPServer):

@@ -25,7 +25,7 @@ TR.app = (() => {
       categories: []
     },
     matrix: { metric: 'maxNorm', granularity: 'chapter', books: 14 },
-    dominance: { metric: 'normScore', aggregation: 'max', hiddenBookSlugs: [], selectionInitialized: false, normalizeDisplay: true, showTrend: true },
+    dominance: { metric: 'normScore', aggregation: 'max', hiddenBookSlugs: [], selectionInitialized: false, normalizeDisplay: true, showTrend: true, rangeStart: null, rangeEnd: null },
     network: { minNorm: 0.1, mode: 'cooccurrence', selected: null },
     passageMetadata: new Map(),
     metadataRequestId: 0,
@@ -101,7 +101,7 @@ TR.app = (() => {
       'nextCandidateBtn', 'originalMetadata', 'candidateMetadata', 'alignmentNote', 'matrixMetricSelect',
       'matrixGranularitySelect', 'matrixBooksInput', 'matrixBooksValue', 'heatmapContainer',
       'dominanceMetricSelect', 'dominanceAggregationSelect', 'dominanceNormalizeInput', 'dominanceTrendInput', 'dominanceVisibleCount', 'dominanceTopBtn', 'dominanceAllBtn', 'dominanceNoneBtn',
-      'dominanceSourceList', 'dominanceHoverInfo', 'dominanceSvg',
+      'dominanceSourceList', 'dominanceHoverInfo', 'dominanceSvg', 'dominanceRangeInfo', 'dominanceTopRangeBtn', 'dominanceResetZoomBtn', 'dominanceSummaryRange', 'dominanceSummaryBody',
       'networkThresholdInput', 'networkThresholdValue', 'networkModeSelect', 'networkSvg', 'networkInspector',
       'scatterSvg', 'scatterCount', 'libraryTableBody', 'bookInspector', 'toast', 'retryMetadataBtn',
       'activeFilterSummary', 'loadingDismissBtn', 'sourceDialog', 'sourcePickerList', 'sourcePickerNote',
@@ -162,7 +162,7 @@ TR.app = (() => {
     els.fileInput.addEventListener('change', handleFileSelection);
     els.addLocalFilesBtn.addEventListener('click', () => els.fileInput.click());
     els.refreshSourcesBtn.addEventListener('click', async () => {
-      await discoverServerSources();
+      await Promise.allSettled([discoverBundledSources(), discoverServerSources(), discoverRemoteSources()]);
       renderSourcePicker();
     });
     els.selectAllSourcesBtn.addEventListener('click', () => {
@@ -402,6 +402,21 @@ TR.app = (() => {
       renderDominance();
       savePreferences();
     });
+    els.dominanceResetZoomBtn.addEventListener('click', () => {
+      state.dominance.rangeStart = null;
+      state.dominance.rangeEnd = null;
+      renderDominance();
+    });
+    els.dominanceTopRangeBtn.addEventListener('click', () => {
+      if (!state.model) return;
+      const data = state.model.aggregateDominance({ metric: state.dominance.metric, aggregation: state.dominance.aggregation, filters: state.filters });
+      const summary = TR.DataModel.summarizeDominanceRange(data, state.dominance.rangeStart ?? 0, state.dominance.rangeEnd ?? (data.records.length - 1));
+      const top = new Set(summary.books.slice(0, 5).map(book => book.slug));
+      state.dominance.hiddenBookSlugs = data.books.filter(book => !top.has(book.slug)).map(book => book.slug);
+      state.dominance.selectionInitialized = true;
+      renderDominance();
+      savePreferences();
+    });
     els.networkModeSelect.addEventListener('change', () => {
       state.network.mode = els.networkModeSelect.value;
       state.network.selected = null;
@@ -425,14 +440,16 @@ TR.app = (() => {
   }
 
   async function discoverAndStart() {
-    setLoading(true, 'מאתר קובצי נתונים', 'סורק JSON / NDJSON בתיקיית המערכת…', 8);
-    const [serverResult, remoteResult] = await Promise.allSettled([
+    setLoading(true, 'מאתר קובצי נתונים', 'סורק מקורות נתונים זמינים…', 8);
+    const [bundledResult, serverResult, remoteResult] = await Promise.allSettled([
+      discoverBundledSources(),
       discoverServerSources(),
       discoverRemoteSources()
     ]);
+    const bundledSources = bundledResult.status === 'fulfilled' ? bundledResult.value : [];
     const serverSources = serverResult.status === 'fulfilled' ? serverResult.value : [];
     const remoteSources = remoteResult.status === 'fulfilled' ? remoteResult.value : [];
-    const allSources = [...serverSources, ...remoteSources];
+    const allSources = [...bundledSources, ...serverSources, ...remoteSources];
 
     setLoading(false);
     if (allSources.length === 1) {
@@ -452,8 +469,47 @@ TR.app = (() => {
     }
   }
 
+  async function discoverBundledSources() {
+    if (window.location.protocol === 'file:') return [];
+    const manifestUrl = new URL('data/manifest.json', window.location.href);
+    let response;
+    try {
+      response = await fetch(manifestUrl, { cache: 'no-store' });
+    } catch {
+      return [];
+    }
+    if (!response.ok) return [];
+    const payload = await response.json();
+    const files = Array.isArray(payload.files) ? payload.files : [];
+    const mapped = [];
+    for (const item of files) {
+      const fileName = String(item.name || '').trim();
+      const relativePath = String(item.path || item.url || fileName).trim();
+      if (!fileName || !relativePath) continue;
+      const id = `bundled:${relativePath}`;
+      const existing = state.sources.get(id);
+      state.sources.set(id, {
+        ...existing,
+        id,
+        label: fileName,
+        origin: 'bundled',
+        url: new URL(relativePath, manifestUrl).href,
+        size: Number(item.size || 0),
+        modified: item.modified || null,
+        model: existing?.model || null,
+        registry: existing?.registry || null,
+        kind: existing?.kind || item.kind || null,
+        error: null
+      });
+      mapped.push(state.sources.get(id));
+    }
+    return mapped;
+  }
+
   async function discoverServerSources() {
-    const response = await fetch('/api/json-files', { cache: 'no-store' });
+    if (window.location.protocol === 'file:') return [];
+    const apiUrl = new URL('api/json-files', window.location.href);
+    const response = await fetch(apiUrl, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
     const sources = Array.isArray(payload.files) ? payload.files : [];
@@ -532,7 +588,7 @@ TR.app = (() => {
   }
 
   async function openSourceDialog() {
-    await Promise.allSettled([discoverServerSources(), discoverRemoteSources()]);
+    await Promise.allSettled([discoverBundledSources(), discoverServerSources(), discoverRemoteSources()]);
     state.pickerSelection = new Set([...state.activeSourceIds, ...state.activeCorpusSourceIds]);
     renderSourcePicker();
     openDialogSafely(els.sourceDialog);
@@ -574,6 +630,7 @@ TR.app = (() => {
   }
 
   function sourceOriginLabel(source) {
+    if (source.origin === 'bundled') return 'קובץ כלול באתר';
     if (source.origin === 'server') return 'בתיקיית המערכת';
     if (source.origin === 'remote') return source.originLabel || 'מקור מרוחק';
     return 'קובץ מהמחשב';
@@ -818,6 +875,9 @@ TR.app = (() => {
     state.activeCandidateId = null;
     state.passageMetadata.clear();
     state.network.selected = null;
+    state.dominance.rangeStart = null;
+    state.dominance.rangeEnd = null;
+    state.dominance.selectionInitialized = false;
     state.reverse.sequenceRecordIds = [];
     state.reverse.sequenceIndex = -1;
     state.reverse.sequenceLocked = false;
@@ -1836,6 +1896,20 @@ TR.app = (() => {
       state.dominance.selectionInitialized = true;
       savePreferences();
     }
+    const maxIndex = Math.max(0, data.records.length - 1);
+    const hasRange = Number.isInteger(state.dominance.rangeStart) && Number.isInteger(state.dominance.rangeEnd) && data.records.length;
+    const rangeStart = hasRange ? TR.utils.clamp(state.dominance.rangeStart, 0, maxIndex) : 0;
+    const rangeEnd = hasRange ? TR.utils.clamp(state.dominance.rangeEnd, rangeStart, maxIndex) : maxIndex;
+    if (hasRange && (rangeStart !== state.dominance.rangeStart || rangeEnd !== state.dominance.rangeEnd)) {
+      state.dominance.rangeStart = rangeStart;
+      state.dominance.rangeEnd = rangeEnd;
+    }
+    const rangeSummary = TR.DataModel.summarizeDominanceRange(data, rangeStart, rangeEnd);
+    const viewData = {
+      ...data,
+      records: data.records.slice(rangeStart, rangeEnd + 1),
+      books: data.books.map(book => ({ ...book, values: book.values.slice(rangeStart, rangeEnd + 1) }))
+    };
     const hidden = new Set(state.dominance.hiddenBookSlugs || []);
     const visible = new Set(data.books.filter(book => !hidden.has(book.slug)).map(book => book.slug));
     els.dominanceVisibleCount.textContent = `${visible.size}/${data.books.length}`;
@@ -1865,12 +1939,40 @@ TR.app = (() => {
       score: 'score',
       fullAlignment: 'יישור מלא'
     }[state.dominance.metric] || state.dominance.metric;
+    const rangeLabel = hasRange
+      ? `${data.records[rangeStart]?.label || `יחידה ${rangeStart + 1}`} – ${data.records[rangeEnd]?.label || `יחידה ${rangeEnd + 1}`}`
+      : 'כל ספר המקור';
+    els.dominanceRangeInfo.textContent = `טווח: ${rangeLabel} · ${rangeSummary.unitCount} יחידות`;
+    els.dominanceSummaryRange.textContent = hasRange ? `${rangeSummary.unitCount} יחידות` : `כל הספר · ${rangeSummary.unitCount} יחידות`;
+    els.dominanceResetZoomBtn.disabled = !hasRange;
+
+    els.dominanceSummaryBody.replaceChildren();
+    if (!rangeSummary.books.length) {
+      const row = document.createElement('tr');
+      row.innerHTML = '<td colspan="6">אין נתונים בטווח.</td>';
+      els.dominanceSummaryBody.append(row);
+    } else {
+      const fragment = document.createDocumentFragment();
+      rangeSummary.books.forEach((book, index) => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${index + 1}</td>
+          <td><span class="dominance-summary-source"><span class="dominance-source-dot" style="--source-color:${book.color}"></span>${TR.utils.escapeHtml(book.title)}</span></td>
+          <td>${book.rangeCoverage}/${rangeSummary.unitCount}</td>
+          <td>${TR.utils.percent(book.rangeCoverageRatio, 0)}</td>
+          <td>${data.normalizedScale ? TR.utils.percent(book.rangeAverage, 0) : TR.utils.compactNumber(book.rangeAverage, 1)}</td>
+          <td>${data.normalizedScale ? TR.utils.percent(book.rangeMax, 0) : TR.utils.compactNumber(book.rangeMax, 1)}</td>`;
+        fragment.append(row);
+      });
+      els.dominanceSummaryBody.append(fragment);
+    }
+
     const resetHover = () => {
       els.dominanceHoverInfo.textContent = `העבר את הסמן על הגרף כדי לראות את המקורות הדומיננטיים בכל יחידה · מדד: ${metricLabel}.`;
     };
     resetHover();
 
-    TR.visualizations.renderSourceDominance(els.dominanceSvg, data, {
+    TR.visualizations.renderSourceDominance(els.dominanceSvg, viewData, {
       visibleBookSlugs: visible,
       normalizeDisplay: state.dominance.normalizeDisplay,
       showTrend: state.dominance.showTrend,
@@ -1897,6 +1999,14 @@ TR.app = (() => {
         selectRecord(record.id, false);
         setView('read');
         updateAfterFilters(false);
+      },
+      onRangeSelect: ({ startIndex, endIndex }) => {
+        const absoluteStart = rangeStart + Math.min(startIndex, endIndex);
+        const absoluteEnd = rangeStart + Math.max(startIndex, endIndex);
+        if (absoluteEnd - absoluteStart < 1) return;
+        state.dominance.rangeStart = absoluteStart;
+        state.dominance.rangeEnd = absoluteEnd;
+        renderDominance();
       }
     });
   }
@@ -3363,6 +3473,8 @@ TR.app = (() => {
       if (typeof state.dominance.selectionInitialized !== 'boolean') state.dominance.selectionInitialized = false;
       if (typeof state.dominance.normalizeDisplay !== 'boolean') state.dominance.normalizeDisplay = true;
       if (typeof state.dominance.showTrend !== 'boolean') state.dominance.showTrend = true;
+      state.dominance.rangeStart = null;
+      state.dominance.rangeEnd = null;
       if (saved.network) state.network = { ...state.network, ...saved.network, selected: null };
       if (!['cooccurrence', 'source', 'sourceGeniza'].includes(state.network.mode)) state.network.mode = 'cooccurrence';
       if (saved.synopsis) {

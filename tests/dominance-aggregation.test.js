@@ -55,4 +55,11 @@ assert.strictEqual(avgScore.maxValue, 80);
 const fullRate = model.aggregateDominance({ metric: 'fullAlignment', aggregation: 'avg' });
 assert.strictEqual(fullRate.books.find(book => book.slug === 'a').values[0].value, 0.5);
 
+const rangeSummary = context.TR.DataModel.summarizeDominanceRange(maxNorm, 0, 0);
+assert.strictEqual(rangeSummary.unitCount, 1);
+assert.strictEqual(rangeSummary.books[0].slug, 'a', 'range ranking should be recalculated for the selected zoom area');
+assert.strictEqual(rangeSummary.books[0].rangeCoverage, 1);
+assert.strictEqual(rangeSummary.books[0].rangeAverage, 0.9);
+assert.strictEqual(rangeSummary.books.find(book => book.slug === 'b').rangeAverage, 0.3);
+
 console.log('dominance aggregation test passed');
