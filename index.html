@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light">
-  <title>מפת שימוש חוזר בטקסט</title>
+  <title>מפת שימוש חוזר בטקסט · V5</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
 
   <header class="app-header">
     <div class="brand-block">
-      <p class="eyebrow">TEXTREUSE · סביבת מחקר</p>
+      <p class="eyebrow">TEXTREUSE · סביבת מחקר <span class="v5-edition-mark">V5.1</span></p>
       <h1>מפת שימוש חוזר בטקסט</h1>
       <p>קריאה צמודה של קטעי המקור לצד מועמדי הקרבה, עם מטא־דאטה מספריא ומבט רוחב על יחסי הספרים.</p>
     </div>
@@ -102,6 +102,7 @@
 
       <nav class="view-tabs" role="tablist" aria-label="תצוגות המחקר">
         <button class="view-tab is-active" type="button" data-view="read" role="tab" aria-selected="true">קריאה והשוואה</button>
+        <button class="view-tab" type="button" data-view="explore" role="tab" aria-selected="false">חקר מקבילות</button>
         <button class="view-tab" type="button" data-view="synopsis" role="tab" aria-selected="false">סינופסיס <span id="synopsisTabCount" class="tab-count">0</span></button>
         <button class="view-tab" type="button" data-view="reverse" role="tab" aria-selected="false">קריאה הפוכה</button>
         <button class="view-tab" type="button" data-view="matrix" role="tab" aria-selected="false">מפת חום</button>
@@ -110,6 +111,45 @@
         <button class="view-tab" type="button" data-view="library" role="tab" aria-selected="false">קטלוג ספרים</button>
         <button class="view-tab" type="button" data-view="diagnostics" role="tab" aria-selected="false">אבחון דאטה</button>
       </nav>
+
+      <section class="view-panel v5-explore-panel" data-view="explore" aria-label="חקר מקבילות">
+        <div class="visualization-header v5-explore-heading">
+          <div><p class="pane-kicker">TEXTREUSE V5.1 · PARALLEL EXPLORER</p><h2 id="v5-section-title">חקר מקבילות</h2>
+            <p id="v5-section-subtitle">כל תוצאות ההתאמה מכל קטעי המקור, מסוננות וממוינות יחד. לחיצה על תוצאה תחזיר אותך למסכי הקריאה.</p></div>
+        </div>
+        <div class="v5-controls" role="search" aria-label="סינון רוחבי">
+          <label><span id="v5-metric-label">דרג לפי</span><select id="v5-metric"></select></label>
+          <label><span id="v5-threshold-label">סף מינימלי</span><input id="v5-threshold" type="number" step="any" placeholder="—"></label>
+          <label class="v5-control-search"><span id="v5-search-label">חיפוש במקבילות</span><input id="v5-search" type="search" placeholder="טקסט / חיבור / מקור"></label>
+          <label><span id="v5-dataset-label">מאגר</span><select id="v5-dataset"></select></label>
+          <label><span id="v5-book-label">חיבור</span><select id="v5-book"></select></label>
+          <label><span id="v5-category-label">קטגוריה</span><select id="v5-category"></select></label>
+          <label><span id="v5-aligned-label">מצב היישור</span><select id="v5-aligned"></select></label>
+          <label><span id="v5-text-label">תצוגת טקסט</span><select id="v5-text-mode"></select></label>
+          <label><span id="v5-ctx-label">מילות הקשר</span><input id="v5-context" type="number" min="0" max="30" step="1" value="7"></label>
+        </div>
+        <div class="v5-toolbar">
+          <div class="v5-toolbar-summary"><strong id="v5-count" aria-live="polite"></strong><small id="v5-warning"></small></div>
+          <div class="v5-toolbar-actions">
+            <button id="v5-reset" type="button" class="secondary-button">איפוס מסנני הסקירה</button>
+            <label class="v5-export-control"><span id="v5-export-label">ייצוא תוצאות</span>
+              <select id="v5-export"><option value="">בחר פורמט…</option><option value="csv">CSV · all rows</option><option value="html">HTML</option>
+                <option value="doc">Word</option><option value="pdf">PDF · browser print</option><option value="png">PNG · first match</option><option value="jpg">JPG · first match</option>
+                <option value="pptx">PowerPoint · first 40</option></select></label>
+          </div>
+        </div>
+        <div class="v51-highlight-toolbar" role="group" aria-label="בקרת הדגשת מקבילות">
+          <label>צביעת התאמות <select id="v51-paint"><option value="groups">לפי קבוצות יישור</option><option value="types">לפי סוג התאמה</option><option value="none">ללא רקע צבעוני</option></select></label>
+          <label>עוצמת הצבע <select id="v51-intensity"><option value="soft">עדינה</option><option value="medium" selected>רגילה</option><option value="strong">מודגשת</option></select></label>
+          <button type="button" id="v51-previous" class="secondary-button">◀ קבוצה קודמת</button><strong id="v51-selected" aria-live="polite">כל הקבוצות</strong><button type="button" id="v51-next" class="secondary-button">קבוצה הבאה ▶</button>
+          <button type="button" id="v51-pin" class="secondary-button" aria-pressed="false">נעל הדגשה</button><button type="button" id="v51-clear" class="secondary-button">הצג את כולן</button>
+          <span class="v51-hint">לחיצה על מילה בוחרת את קבוצת ההתאמה שלה; מעבר עכבר מדגיש התאמות בשני הטקסטים.</span>
+        </div>
+        <div class="v5-match-legend"><span><i class="v5-key exact"></i> התאמה מדויקת</span><span><i class="v5-key approximate"></i> התאמה מקורבת</span>
+          <span>צבעי רקע שונים = קבוצות יישור; מעבר עכבר מדגיש מילים קשורות.</span></div>
+        <div id="v5-results" class="v5-results" aria-live="polite"></div>
+        <button id="v5-more" type="button" class="secondary-button v5-more" hidden>הצג עוד</button>
+      </section>
 
       <section class="view-panel" data-view="reverse">
         <div class="visualization-header">
@@ -192,6 +232,7 @@
               <div class="segmented-control color-mode-switch" role="group" aria-label="מקור צבעי היישור">
                 <button type="button" class="is-active" data-color-mode="system">צבעי המערכת</button>
                 <button type="button" data-color-mode="original">צבעי TEXTREUSE</button>
+                <button type="button" data-color-mode="groups">קבוצות יישור · V5</button>
               </div>
             </div>
 
@@ -272,6 +313,7 @@
             <div class="segmented-control color-mode-switch" role="group" aria-label="מקור צבעי היישור בסינופסיס">
               <button type="button" class="is-active" data-color-mode="system">צבעי המערכת</button>
               <button type="button" data-color-mode="original">צבעי TEXTREUSE</button>
+              <button type="button" data-color-mode="groups">קבוצות יישור</button>
             </div>
             <label class="checkbox-control"><input id="syncSynopsisScrollInput" type="checkbox" checked><span>גלילה מסונכרנת</span></label>
             <label class="column-width-control"><span>רוחב עמודה</span><input id="synopsisColumnWidthInput" type="range" min="280" max="560" step="20" value="380"></label>
@@ -570,6 +612,8 @@
   <script src="resolvers.js" defer></script>
   <script src="genizah.js" defer></script>
   <script src="visualizations.js" defer></script>
+  <script src="pptxgen.min.js" defer></script>
+  <script src="reuse-lab.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

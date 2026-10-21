@@ -1,0 +1,15 @@
+{
+  "Demo_Source_p_1_1": {
+    "candidates": [
+      {"elastic_id":"self-1","location":"Demo_Source_p_1_1","norm_score":1,"alignment_details":{"location":"Demo_Source_p_1_1","source_categories":["Demo","Source"],"passage_text":"מקום אחד סיפור העתיק ובו מילים רבות בסדר","source_text":"מקום אחד סיפור העתיק ובו מילים רבות בסדר","score":99,"norm_score":1,"alignment_score":1}},
+      {"elastic_id":"candidate-1","norm_score":0.91,"alignment_score":0.87,"alignment_details":{"location":"Demo_Parallel_A_p_2_1","source_categories":["Demo","Parallel A"],"passage_text":"מקום אחד סיפור העתיק ובו מילים רבות בסדר","source_text":"מקום אחד סיפור קדום ובו מילים אחרות בסדר","score":48.5,"norm_score":0.91,"alignment_score":0.87,"alignment_sequence":"[[[0,0,1,\"exact_match\"],[1,1,1,\"exact_match\"]],[[3,3,0.72,\"morph_match\"],[4,4,1,\"exact_match\"]],[[7,7,1,\"exact_match\"]]]"}},
+      {"elastic_id":"candidate-2","norm_score":0.78,"alignment_score":0.64,"alignment_details":{"location":"Demo_Parallel_B_p_4_2","source_categories":["Demo","Parallel B"],"passage_text":"מקום אחד סיפור העתיק ובו מילים רבות בסדר","source_text":"אחד חדש סיפור אחר וגם מילים שונות בהמשך","score":23.9,"norm_score":0.78,"alignment_score":0.64,"alignment_sequence":"[[[1,0,1,\"exact_match\"],[2,2,1,\"exact_match\"]]]"}},
+      {"elastic_id":"candidate-3","norm_score":0.5,"alignment_score":0,"alignment_details":{"location":"Demo_Unaligned_p_1_1","source_categories":["Demo","Unaligned"],"passage_text":"מקום אחד סיפור העתיק ובו מילים רבות בסדר","source_text":"טקסט בלי רצף יישור","score":8,"norm_score":0.5,"alignment_score":0}}
+    ]
+  },
+  "Demo_Source_p_1_2": {
+    "candidates": [
+      {"elastic_id":"candidate-4","norm_score":0.8,"alignment_score":0.8,"alignment_details":{"location":"Demo_Parallel_C_p_3_2","source_categories":["Demo","Parallel C"],"passage_text":"מילים נוספות מתוך סיפור אחר","source_text":"מילים נוספות מתוך חיבור אחר","score":42,"norm_score":0.8,"alignment_score":0.8,"alignment_sequence":"[[[0,0,1,\"exact_match\"],[1,1,1,\"exact_match\"],[2,2,1,\"exact_match\"]]]"}}
+    ]
+  }
+}

@@ -8,7 +8,7 @@ assert(app.includes("new URL('data/manifest.json', window.location.href)"), 'sta
 assert(!app.includes("fetch('/api/json-files'"), 'root-relative API fetch breaks GitHub project pages');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'data', 'manifest.json'), 'utf8'));
-assert(Array.isArray(manifest.files) && manifest.files.length > 0, 'manifest must contain at least one packaged data file');
+assert(Array.isArray(manifest.files), 'manifest files must be an array (empty until the user adds data)');
 for (const item of manifest.files) {
   assert(item.name && item.path, 'manifest entry needs name/path');
   const full = path.resolve(root, 'data', item.path);

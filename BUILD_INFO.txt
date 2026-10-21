@@ -1,3 +1,7 @@
+TEXTREUSE V5.1 — Stage A static GitHub Pages integration (2026-10-21)
+Added: browser-only parallel explorer; pair/group highlights; global rankings and per-passage metrics; context view; browser exports (CSV/HTML/Word/PDF print/PNG/JPG/PPTX).
+Preserved: existing reader/synopsis/reverse/visualizations/adapters/resolvers/large-file modes. No live ACT API.
+
 TextReuse viewer - fast large-file + exact-color build
 Features include:
 - All original viewer tabs/functions retained
@@ -25,3 +29,5 @@ Final folio-order correction (2026-09-01):
 - Folio sorting now takes precedence over generic source-book and local-metadata sorting.
 - Supports fol_30r_1, fol 30r 1, fol-30-r-1, and folio_30_v_2 style identifiers.
 - Regression test explicitly verifies fol 30 < fol 100 < fol 200.
+
+V5.1: alignment colours, explorer highlighting controls and synopsis group mode.

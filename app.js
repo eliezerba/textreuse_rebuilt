@@ -81,6 +81,11 @@ TR.app = (() => {
     bindEvents();
     restorePreferences();
     syncControlsFromState();
+    TR.reuseLab?.mount({
+      getData: () => ({ model: state.model, filters: state.filters }),
+      openRead: (recordId, candidateId) => openParallelFromLab(recordId, candidateId, false),
+      openSynopsis: (recordId, candidateId) => openParallelFromLab(recordId, candidateId, true)
+    });
     setView('read');
     discoverAndStart();
   }
@@ -147,7 +152,7 @@ TR.app = (() => {
       if (state.activeView === 'synopsis') renderSynopsis();
     }));
     els.colorModeButtons.forEach(button => button.addEventListener('click', () => {
-      state.colorMode = button.dataset.colorMode === 'original' ? 'original' : 'system';
+      state.colorMode = ['system', 'original', 'groups'].includes(button.dataset.colorMode) ? button.dataset.colorMode : 'system';
       els.colorModeButtons.forEach(item => item.classList.toggle('is-active', item.dataset.colorMode === state.colorMode));
       renderComparison();
       if (state.activeView === 'synopsis') renderSynopsis();
@@ -1245,6 +1250,14 @@ TR.app = (() => {
     };
   }
 
+  function alignedMarkup(record, candidate, role, color) {
+    const details = viewAlignmentDetails(record, candidate);
+    if (state.colorMode === 'groups' && TR.reuseLab) {
+      return TR.reuseLab.renderWords(record, candidate, role);
+    }
+    return TR.utils.alignedTextHtml(details, role, { color, colorMode: state.colorMode });
+  }
+
   function renderComparison() {
     const record = activeRecord();
     const candidate = activeCandidate();
@@ -1259,7 +1272,7 @@ TR.app = (() => {
       ? (record.localMetadata?.originalText || record.originalSourceText || record.originalText)
       : (record.localMetadata?.analysisText || record.analysisText || record.originalText);
     els.sourceText.innerHTML = candidate && !showOriginal
-      ? TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'original', { color: alignmentColor, colorMode: state.colorMode })
+      ? alignedMarkup(record, candidate, 'original', alignmentColor)
       : TR.utils.escapeHtml(sourcePlainText);
 
     if (!candidate) {
@@ -1284,12 +1297,12 @@ TR.app = (() => {
       : (candidate.localMetadata?.analysisText || candidate.analysisText || candidate.sourceText);
     els.candidateText.innerHTML = showOriginal
       ? TR.utils.escapeHtml(candidatePlainText)
-      : TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'candidate', { color: alignmentColor, colorMode: state.colorMode });
+      : alignedMarkup(record, candidate, 'candidate', alignmentColor);
     setMetricCards(candidate);
     els.alignmentNote.textContent = showOriginal
       ? 'מוצג הנוסח המקורי מן ה־Passage Registry. ההדגשות מוסתרות במצב זה משום שהיישור חושב על טקסט הניתוח.'
       : candidate.hasDetailedAlignment
-        ? (state.colorMode === 'original' ? 'מוצגים צבעי TEXTREUSE המקוריים כאשר הם קיימים; זוגות יישור ללא צבע מפורש משתמשים בצבע המערכת.' : 'אותו צבע מוצג בשני הטקסטים לפי רצף היישור המפורט שסיפקה מערכת TEXTREUSE.')
+        ? (state.colorMode === 'original' ? 'מוצגים צבעי TEXTREUSE המקוריים כאשר הם קיימים.' : state.colorMode === 'groups' ? 'צבע נפרד לכל קבוצת יישור; העבר את העכבר על מילה כדי להדגיש את קבוצת ההתאמות שלה בשני הצדדים.' : 'אותו צבע מוצג בשני הטקסטים לפי רצף היישור המפורט שסיפקה מערכת TEXTREUSE.')
         : 'סימוני ה־HTML של TEXTREUSE הועברו גם לטקסט המקור באמצעות יישור המילים, כדי להציג צבע מקביל בשני הצדדים.';
     renderAlignmentInspector(record, candidate);
     renderMetadataLoading(candidate);
@@ -2668,7 +2681,7 @@ TR.app = (() => {
     const local = candidate.localMetadata || {};
     const textHtml = state.textMode === 'original'
       ? TR.utils.escapeHtml(local.originalText || candidate.originalSourceText || candidate.sourceText)
-      : TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'candidate', { color, colorMode: state.colorMode });
+      : alignedMarkup(record, candidate, 'candidate', color);
     const version = Array.isArray(local.versions) ? local.versions.join(' · ') : (local.versions || '');
     return `<article class="continuous-column continuous-candidate-column" style="--column-color:${color}">
       <header class="continuous-column-head"><span>מועמד מן הדאטהסט</span><h4>${TR.utils.escapeHtml(local.heTitle || local.title || candidate.bookTitle)}</h4><p>${TR.utils.escapeHtml(local.passageId || candidate.displayRef)}</p></header>
@@ -2804,7 +2817,7 @@ TR.app = (() => {
         ref: candidate.localMetadata?.passageId || candidate.displayRef,
         textHtml: state.textMode === 'original'
           ? TR.utils.escapeHtml(candidate.localMetadata?.originalText || candidate.originalSourceText || candidate.sourceText)
-          : TR.utils.alignedTextHtml(viewAlignmentDetails(record, candidate), 'candidate', { color, colorMode: state.colorMode }),
+          : alignedMarkup(record, candidate, 'candidate', color),
         meta: `ציון ${TR.utils.percent(candidate.normScore, 1)} · יישור ${TR.utils.percent(candidate.alignmentScore, 1)} · score ${TR.utils.compactNumber(candidate.score, 0)}`,
         candidateId: candidate.id,
         recordId: record.id,
@@ -3265,6 +3278,7 @@ TR.app = (() => {
 
   function renderActiveVisualization() {
     if (state.activeView === 'synopsis') renderSynopsis();
+    else if (state.activeView === 'explore') TR.reuseLab?.render();
     else if (state.activeView === 'reverse') renderReverse();
     else if (state.activeView === 'matrix') renderMatrix();
     else if (state.activeView === 'dominance') renderDominance();
@@ -3288,6 +3302,20 @@ TR.app = (() => {
     els.views.forEach(panel => panel.classList.toggle('is-active', panel.dataset.view === state.activeView));
     renderActiveVisualization();
     savePreferences();
+  }
+
+  function openParallelFromLab(recordId, candidateId, synopsis) {
+    const record = state.model?.recordMap.get(recordId);
+    if (!record || !record.candidates.some(item => item.id === candidateId)) return;
+    state.activeRecordId = recordId;
+    state.activeCandidateId = candidateId;
+    if (synopsis) {
+      ensureCandidateSelectionSet(recordId).add(candidateId);
+      state.synopsis.mode = 'single';
+      state.synopsis.strategy = 'manual';
+      setView('synopsis');
+    } else setView('read');
+    renderAll();
   }
 
   function selectRecord(recordId, rerender = true) {
@@ -3490,7 +3518,7 @@ TR.app = (() => {
         if (!['all', 'sefariaOnly', 'nonSefariaOnly'].includes(state.diagnostics.mode)) state.diagnostics.mode = 'all';
       }
       if (saved.textMode) state.textMode = saved.textMode === 'original' ? 'original' : 'analysis';
-      if (saved.colorMode) state.colorMode = saved.colorMode === 'original' ? 'original' : 'system';
+      if (saved.colorMode) state.colorMode = ['original', 'system', 'groups'].includes(saved.colorMode) ? saved.colorMode : 'system';
       if (saved.reverse) {
         state.reverse = { ...state.reverse, ...saved.reverse };
         if (!['book', 'genizaAll', 'genizaFragment', 'vrrManuscript'].includes(state.reverse.mode)) state.reverse.mode = 'book';

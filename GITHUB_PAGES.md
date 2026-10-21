@@ -13,7 +13,7 @@ The included `.github/workflows/deploy-pages.yml` publishes the folder as-is.
 
 ## Included data
 
-Static hosting cannot discover directory contents by itself, so the viewer uses `data/manifest.json` to know which JSON files are packaged with the site. The supplied sample JSON is already listed there and will be available immediately on GitHub Pages.
+Static hosting cannot discover directory contents by itself, so the viewer uses `data/manifest.json` to know which JSON files are packaged with the site. This V5.1 distribution intentionally has an empty manifest because the supplied repository ZIP did not contain publishable research data. Add your own datasets to data/ and regenerate the manifest, or load files from the browser.
 
 When adding another `.json`, `.jsonl`, or `.ndjson` file for publication:
 

@@ -265,3 +265,9 @@ remoteSources: {
 
 ### Folio ordering
 When source identifiers contain `fol` / `folio`, manuscript reading order is numeric: folio number first, then recto (`r`) before verso (`v`), then the unit number. For example: `fol 30r 1` precedes `fol 100r 1`, which precedes `fol 200r 1`.
+
+## TEXTREUSE V5 (2026-10-21)
+
+V5 מוסיפה את לשונית **חקר מקבילות** ומצב צביעת **קבוצות יישור**. היא פועלת בדפדפן בלבד ואינה דורשת ACT API או Elasticsearch. פרטים, מגבלות ושמירה על תאימות: ראו `V5_RELEASE_NOTES_HE.md`.
+
+**הערה לחבילה זו:** לא סופקו קובצי המחקר תחת `data/`, ולכן `data/manifest.json` ריק עד שמעתיקים אליו קבצי מחקר ומריצים `python build_manifest.py`. בניגוד לתיאור ההיסטורי של גרסאות קודמות בראש ה־README, אין בחבילת V5 דאטה מחקרית מוכנה מראש. קובצי הדוגמה ב־`tests/fixtures` הם בדיקות סינתטיות בלבד.
