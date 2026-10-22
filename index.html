@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light">
-  <title>מפת שימוש חוזר בטקסט · V5</title>
+  <title>מפת שימוש חוזר בטקסט · V5.4</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -12,11 +12,12 @@
 
   <header class="app-header">
     <div class="brand-block">
-      <p class="eyebrow">TEXTREUSE · סביבת מחקר <span class="v5-edition-mark">V5.1</span></p>
+      <p class="eyebrow">TEXTREUSE · סביבת מחקר <span class="v5-edition-mark">V5.4</span></p>
       <h1>מפת שימוש חוזר בטקסט</h1>
       <p>קריאה צמודה של קטעי המקור לצד מועמדי הקרבה, עם מטא־דאטה מספריא ומבט רוחב על יחסי הספרים.</p>
     </div>
     <div class="header-actions">
+      <button id="v53-settings-open" type="button" class="secondary-button" aria-haspopup="dialog" aria-controls="v53-settings-dialog">⚙ הגדרות תצוגה</button>
       <button id="langToggleBtn" class="secondary-button" type="button">EN</button>
       <input id="fileInput" type="file" accept="application/json,.json,.jsonl,.ndjson,application/x-ndjson" multiple hidden>
       <button id="loadFileBtn" class="primary-button" type="button">בחירת קובצי נתונים</button>
@@ -114,7 +115,7 @@
 
       <section class="view-panel v5-explore-panel" data-view="explore" aria-label="חקר מקבילות">
         <div class="visualization-header v5-explore-heading">
-          <div><p class="pane-kicker">TEXTREUSE V5.1 · PARALLEL EXPLORER</p><h2 id="v5-section-title">חקר מקבילות</h2>
+          <div><p class="pane-kicker">TEXTREUSE V5.4 · PARALLEL EXPLORER</p><h2 id="v5-section-title">חקר מקבילות</h2>
             <p id="v5-section-subtitle">כל תוצאות ההתאמה מכל קטעי המקור, מסוננות וממוינות יחד. לחיצה על תוצאה תחזיר אותך למסכי הקריאה.</p></div>
         </div>
         <div class="v5-controls" role="search" aria-label="סינון רוחבי">
@@ -199,7 +200,14 @@
       </section>
 
       <section class="view-panel is-active" data-view="read">
-        <div class="reading-layout">
+        <div class="v52-reading-controls" role="group" aria-label="התאמת שטח הקריאה">
+          <button type="button" id="v52-toggle-source" aria-pressed="false" aria-controls="sourceList">צמצם ספר מקור</button>
+          <button type="button" id="v52-toggle-candidates" aria-pressed="false" aria-controls="candidateList">צמצם קטעים לבחירה</button>
+          <button type="button" id="v52-focus" aria-pressed="false">מיקוד בטקסט</button>
+          <label for="v52-font-size">גודל טקסט <input id="v52-font-size" type="range" min="17" max="27" step="1" value="17"><output id="v52-font-value">17px</output></label>
+          <button type="button" id="v52-reset" class="secondary-button">אפס תצוגה</button>
+        </div>
+        <div class="reading-layout" id="v52-reading-layout">
           <aside class="pane source-pane">
             <div class="pane-header">
               <div class="source-rail-heading"><p class="pane-kicker">ספר המקור</p><h2 id="sourceRailTitle">טוען את כותרת הספר…</h2><small id="sourceRailSubtitle">קטעי הספר לפי סדר המקור</small></div>
@@ -598,6 +606,23 @@
     </div>
   </div>
 
+  <dialog id="v53-settings-dialog" class="v53-settings-dialog" aria-labelledby="v53-settings-title" dir="rtl">
+    <form method="dialog" class="v53-settings-body">
+      <div class="v53-settings-top"><div><h2 id="v53-settings-title">הגדרות תצוגה אישיות</h2><p>ההגדרות חלות על הקריאה, הסינופסיס וחקר המקבילות, ונשמרות בדפדפן הזה.</p></div><button type="submit" class="secondary-button" aria-label="סגור הגדרות">✕</button></div>
+      <div class="v53-settings-grid">
+        <label>גופן קריאה<select id="v53-font"><option value="Assistant">Assistant (ברירת מחדל)</option><option value="Arial">Arial</option><option value="David">David</option><option value="Noto Sans Hebrew">Noto Sans Hebrew</option><option value="sans-serif">גופן מערכת</option></select></label>
+        <label>גודל גופן <output id="v53-size-value" for="v53-size">17px</output><input id="v53-size" type="range" min="15" max="27" step="1" value="17"></label>
+        <label>ריווח שורות<select id="v53-leading"><option value="1.15">1.15</option><option value="1.25">1.25</option><option value="1.3">1.30</option><option value="1.4" selected>1.40 (ברירת מחדל)</option><option value="1.5">1.50</option><option value="1.65">1.65</option></select></label>
+        <label>משקל גופן<select id="v53-weight"><option value="400">רגיל</option><option value="500">בינוני</option><option value="600">מודגש</option></select></label>
+        <label>ריווח אותיות<select id="v53-spacing"><option value="0">רגיל</option><option value="0.2">מעט מרווח</option><option value="0.5">מרווח</option></select></label>
+      </div>
+      <div class="v53-preview"><strong>תצוגה מקדימה</strong><p id="v53-preview-text">אמר רבי שמעון: מתוך הדברים אנו למדים על הקשרים שבין המקורות ועל דרכי העברתם מדור לדור. מילים מקבילות מסומנות בצבעים שונים כדי להקל על ההשוואה.</p></div>
+      <div class="v53-settings-actions"><button type="button" id="v53-settings-reset" class="secondary-button">שחזר ברירות מחדל</button><button type="submit" class="primary-button">סגור</button></div>
+      <small>ההעדפות נשמרות מקומית בדפדפן, לכל אתר ודפדפן בנפרד.</small>
+    </form>
+  </dialog>
+
+  <button id="v54-settings-float" type="button" aria-haspopup="dialog" aria-controls="v53-settings-dialog" class="v54-settings-float">⚙ הגדרות תצוגה</button>
   <div id="toast" class="toast" hidden role="status"></div>
 
   <script src="config.js" defer></script>
@@ -615,5 +640,6 @@
   <script src="pptxgen.min.js" defer></script>
   <script src="reuse-lab.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="readability-v53.js" defer></script>
 </body>
 </html>
